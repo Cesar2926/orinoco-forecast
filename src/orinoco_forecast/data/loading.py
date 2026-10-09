@@ -3,16 +3,16 @@
 from pathlib import Path
 from typing import Any
 
-import pandas as pd
+import polars as pl
 
 
 def load_raw_excel(
     path: str | Path, sheet_name: str | int | None = None, **kwargs: Any
-) -> pd.DataFrame:
-    """Placeholder for raw Excel reading and temporal-index validation."""
+) -> pl.DataFrame:
+    """Placeholder for raw Excel reading and temporal-order validation."""
     raise NotImplementedError("TODO")
 
 
-def load_source(name: str) -> pd.DataFrame:
+def load_source(name: str) -> pl.DataFrame:
     """Placeholder for loading a named source from the data YAML."""
     raise NotImplementedError("TODO")

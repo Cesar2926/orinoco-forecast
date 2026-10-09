@@ -17,11 +17,11 @@ Scaffold para explorar pronósticos de niveles diarios del río Orinoco con fuen
 
 ## Entorno y comandos
 
-Se requiere Python 3.12 (fijado en `.python-version`) y `uv`.
+Se requiere Python 3.12 (fijado en `.python-version`) y `uv`. El stack de tablas es **Polars** (sin pandas) y el de redes es **PyTorch**.
 
 ```bash
 uv sync
-uv run python -c "import torch, pandas, statsmodels"
+uv run python -c "import torch, polars, statsmodels"
 uv run pytest
 uv run ruff check .
 uv run ruff format .

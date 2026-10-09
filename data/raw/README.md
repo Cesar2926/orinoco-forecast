@@ -32,7 +32,7 @@ de retirarlos, pero debe confirmarse contra la fuente hidrológica original.
 - **Hojas:** 58 pestañas en total: 2 hojas con celdas (`NIVELES`, `REGRESION`) y
   56 hojas de gráficos (chartsheets). Los chartsheets no contienen tablas de
   celdas que puedan cargarse como series.
-- **`NIVELES`:** dimensión física reportada por openpyxl de 392 × 117; pandas lee
+- **`NIVELES`:** dimensión física reportada por openpyxl de 392 × 117; la auditoría leyó
   389 × 109 celdas no vacías. La primera fila es el encabezado. Contiene 365 filas
   de calendario seguidas por 24 filas de resúmenes/separadores/blancos.
 - **Frecuencia y fechas:** diaria, calendario de 365 días (no hay fila para el 29
@@ -41,7 +41,7 @@ de retirarlos, pero debe confirmarse contra la fuente hidrológica original.
   nulos (0,51 %). El calendario representado va de `1930-01-01` a `2025-12-31`;
   la última lectura no nula está en `2025-12-30`.
 - **Nulos y rarezas:** faltan 179 lecturas en las columnas 1930–2025. Las filas de
-  resumen mezclan números y texto en `DIA`/`DIA DEL MES`; pandas infiere esas
+  resumen mezclan números y texto en `DIA`/`DIA DEL MES`; la auditoría infirió esas
   columnas como `object`. `1960` también queda como `object` por celdas fuera del
   calendario, aunque sus 365 valores del calendario son numéricos. Hay columnas
   separadoras sin nombre y alertas/estadísticas al final. openpyxl reporta
@@ -64,7 +64,7 @@ de retirarlos, pero debe confirmarse contra la fuente hidrológica original.
 | `Alerta Verde`, `Alerta Amarilla`, `Alerta Roja` | float | Umbrales de alerta hidrológica, probable. |
 | `Unnamed: 100`, `Unnamed: 105` | float/nulo | Columnas separadoras o celdas sin rótulo. |
 
-La hoja `REGRESION` tiene dimensión física 388 × 68 (pandas: 371 × 68), 67
+La hoja `REGRESION` tiene dimensión física 388 × 68 (auditoría: 371 × 68), 67
 columnas con etiquetas de año 1943–2009 y `Unnamed: 67`. Sus datos son mayormente
 float, con 5,9 % de celdas nulas; no contiene una fecha convencional y parece una
 tabla de cálculos de regresión, por eso no se registra como fuente de serie.
