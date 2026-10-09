@@ -1,0 +1,8 @@
+# Shared chronological protocol; models must not shuffle time-series rows.
+source: orinoco_stations
+horizon: 30 # Daily forecast horizon, shared by every model.
+context_length: 365 # Shared one-year context for every model.
+n_splits: 5 # Walk-forward folds.
+initial_train_size: 10950 # About 30 years; adjust for shorter sources.
+step_size: 365 # Advance one year per fold.
+seasonality: 365 # Seasonal-naive period used by MASE once implemented.

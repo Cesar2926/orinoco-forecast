@@ -1,0 +1,6 @@
+# Inference-only dependency is optional: `uv sync --extra timesfm`.
+# The google/timesfm-3.0-pytorch weights are non-commercial/non-production.
+checkpoint: google/timesfm-3.0-pytorch
+inference_only: true
+device: auto
+per_core_batch_size: 8

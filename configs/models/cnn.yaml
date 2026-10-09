@@ -1,0 +1,6 @@
+# Starter 1D convolution settings only; implementation remains TODO.
+channels: [32, 64]
+kernel_size: 3
+dropout: 0.1
+epochs: 50
+learning_rate: 0.001

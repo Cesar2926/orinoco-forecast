@@ -46,11 +46,11 @@ de retirarlos, pero debe confirmarse contra la fuente hidrológica original.
   calendario, aunque sus 365 valores del calendario son numéricos. Hay columnas
   separadoras sin nombre y alertas/estadísticas al final. openpyxl reporta
   encabezados/pies de página que no puede interpretar; los ignora al leer.
-- **Objetivo inicial:** `nivel_m`, armado en memoria a partir de cada columna de
-  año y las partes `MES` + `DIA DEL MES`. Los valores observados no se imputan ni se
-  alteran; las filas no calendáricas y la columna vacía 2026 no forman parte de la
-  serie. La omisión del 29 de febrero se conserva y genera advertencia de
-  frecuencia irregular. Unidad metros por confirmar.
+- **Objetivo propuesto:** `nivel_m`, que se podría armar en memoria a partir de
+  cada columna de año y las partes `MES` + `DIA DEL MES`. La conversión aún no está
+  implementada. Se prevé excluir filas no calendáricas y la columna vacía 2026,
+  conservar los valores tal cual y señalar la omisión del 29 de febrero. Unidad
+  metros por confirmar.
 
 | Columna / grupo | Tipo observado | Significado probable |
 |---|---|---|

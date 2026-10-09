@@ -1,0 +1,5 @@
+# Configuration placeholder; no averaging or stacking is implemented.
+strategy: equal_weight_average
+models: [arima, lstm, tree, cnn, transformer, timesfm]
+weights: null
+validation_metric: mae

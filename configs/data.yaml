@@ -1,0 +1,53 @@
+# Raw inputs are immutable. Paths are relative to the repository root.
+sources:
+  - name: orinoco_stations
+    path: "data/raw/Niveles Orinoco.xlsx"
+    sheet: "Niveles PC CO CB P"
+    date_column: fecha
+    target_column: ciudad_bolivar
+    freq: D
+    covariates: [ayacucho, caicara, palua]
+    format: excel
+
+  # This file's .xls suffix is retained, but its payload is CSV, not a workbook.
+  # It is an exact duplicate of orinoco_stations in the audited worktree.
+  - name: orinoco_stations_csv_export
+    path: "data/raw/dataset_imputado_simpleml.csv.xls"
+    sheet: null
+    date_column: fecha
+    target_column: ciudad_bolivar
+    freq: D
+    covariates: [ayacucho, caicara, palua]
+    format: csv
+    date_format: "%Y/%m/%d"
+    duplicate_of: orinoco_stations
+
+  # NIVELES stores years in columns and month/day in rows. The future loader
+  # should reshape only these value columns in memory, never rewrite the workbook.
+  - name: ciudad_bolivar_historical
+    path: "data/raw/Niveles Del Orinoco Est. Ciudad Bolivar 1930-2025.xlsx"
+    sheet: NIVELES
+    date_column: fecha
+    target_column: nivel_m
+    freq: D
+    format: excel
+    layout: wide_years
+    date_parts:
+      month_column: MES
+      day_column: "DIA DEL MES"
+      year_column_pattern: "^(19|20)\\d{2}$"
+      first_year: 1930
+      last_year: 2025
+      month_mapping:
+        ENE: 1
+        FEB: 2
+        MAR: 3
+        ABR: 4
+        MAY: 5
+        JUN: 6
+        JUL: 7
+        AGO: 8
+        SEP: 9
+        OCT: 10
+        NOV: 11
+        DIC: 12

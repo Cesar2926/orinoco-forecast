@@ -1,0 +1,4 @@
+# Starter ARIMA parameters; implementation remains TODO.
+order: [2, 1, 2]
+seasonal_order: [0, 0, 0, 0]
+auto_order: false
