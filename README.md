@@ -27,6 +27,9 @@ uv run ruff check .
 uv run ruff format .
 ```
 
+Por el alcance de scaffold, pytest encuentra dos pruebas placeholder y las omite;
+todavía no hay pruebas de comportamiento.
+
 Los pesos de TimesFM 3.0 no se descargan con la instalación normal. Para añadir el paquete de inferencia opcional:
 
 ```bash
