@@ -1,0 +1,32 @@
+# uv-managed environment
+.venv/
+
+# Python and test caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.ipynb_checkpoints/
+
+# Build outputs
+build/
+dist/
+*.egg-info/
+
+# Forecast artifacts and derived datasets; keep only empty-folder markers.
+data/interim/*
+!data/interim/.gitkeep
+data/processed/*
+!data/processed/.gitkeep
+data/predictions/
+!data/predictions/
+data/predictions/*
+!data/predictions/*/
+data/predictions/*/*
+!data/predictions/*/.gitkeep
+artifacts/
+
+# Model checkpoints are never committed, wherever they are written.
+*.pt
