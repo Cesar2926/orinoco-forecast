@@ -64,4 +64,28 @@ configs/                    # datos, backtest, modelos y ensamble
  reports/figures/
 ```
 
-Comandos equivalentes están disponibles en `Makefile`: `make setup`, `make test`, `make lint`, `make format` y `make clean`.
+## Makefile
+
+Objetivos disponibles: `make setup`, `make test`, `make lint`, `make format` y `make clean`.
+
+### Windows local
+
+`make` no viene preinstalado en Windows. Opciones:
+
+1. Ejecutar los comandos uv equivalentes directamente (ver sección "Entorno y comandos"): `uv sync` = `make setup`, `uv run pytest` = `make test`, `uv run ruff check .` = `make lint`, `uv run ruff format .` = `make format`.
+2. Instalar GNU Make una sola vez (`choco install make` o `scoop install make`) y usar `make <objetivo>` desde PowerShell igual que en Linux.
+
+### Google Colab / Linux
+
+`make` ya está disponible; `uv` no. En la primera celda del notebook:
+
+```python
+!curl -LsSf https://astral.sh/uv/install.sh | sh
+!make setup
+!make test
+!make lint
+```
+
+En celdas siguientes conviene `%%bash` + `make <objetivo>`. `uv sync` descarga automáticamente el Python 3.12 gestionado por uv.
+
+Cada target del `Makefile` solo envuelve los mismos comandos uv, así que el resultado es idéntico en local y en Colab.
