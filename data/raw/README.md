@@ -101,3 +101,16 @@ Nombres de los 56 chartsheets, conservados intactos: `H1962`–`H1980`,
    existentes.
 3. Que la estructura de `NIVELES` se deba interpretar con meses abreviados en
    español, años en columnas y días del mes en filas.
+
+## `Nivel Orinoco Formateado.csv` — 653 458 bytes
+
+- **Origen:** aportado por el equipo (commit `06a9205`). Es la tabla de
+  `Niveles Orinoco.xlsx` extendida hasta `2025-12-31` con lecturas de Ciudad
+  Bolívar tomadas de `Niveles Del Orinoco Est. Ciudad Bolivar 1930-2025.xlsx`.
+  Se generó a mano, sin código en el repo que lo reproduzca; por eso se versiona
+  aquí y no en `data/interim/` (ignorado por git).
+- **Formato:** CSV UTF-8, columnas `fecha,ayacucho,caicara,ciudad_bolivar,palua`,
+  fechas `%Y/%m/%d`. 18 993 filas, diaria, `1974-01-01` a `2025-12-31`.
+- **Nulos:** `ciudad_bolivar`: 2; `ayacucho` y `caicara`: 310; `palua`: 327. Las
+  310 filas desde `2025-02-25` solo traen `ciudad_bolivar`.
+- **Pendiente:** no está registrado en `configs/data.yaml`.
