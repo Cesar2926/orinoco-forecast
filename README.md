@@ -1,91 +1,528 @@
 # Orinoco Forecast
 
-Scaffold para explorar pronósticos de niveles diarios del río Orinoco con fuentes versionadas, validación cronológica y varios modelos comparables. Este repositorio comenzó como `Proyecto-IA-Orinoco`; los Excel se conservan como fuentes y se retiraron los scripts, CSV generados y gráficos exploratorios heredados.
+Pronóstico del nivel diario del río Orinoco con **14 días de anticipación**, desarrollado
+para la materia *Inteligencia Artificial: Aprendizaje Automático* (UCAB). El proyecto
+compara seis familias de modelos bajo un mismo protocolo de evaluación cronológica para
+responder una pregunta concreta: **¿qué tipo de modelo predice mejor el comportamiento del
+río a dos semanas, y cuánto mejora respecto a una predicción ingenua?**
 
-> **Alcance actual:** carpetas, configuración, entorno y archivos Python con placeholders. No se implementan los modelos, el entrenamiento, el ensamble, la carga de datos ni las métricas.
+> **Estado:** en construcción. La sección [Estado de implementación](#estado-de-implementación)
+> indica qué partes ya funcionan y cuáles están pendientes.
 
-## Modelos previstos
+---
 
-| Modelo | Biblioteca | Rol en este proyecto |
+## Tabla de contenidos
+
+1. [Problema y objetivos](#problema-y-objetivos)
+2. [Datos](#datos)
+3. [Arquitectura del pipeline](#arquitectura-del-pipeline)
+4. [Modelos](#modelos)
+5. [Protocolo de evaluación](#protocolo-de-evaluación)
+6. [Prevención de fuga de datos](#prevención-de-fuga-de-datos)
+7. [Estructura del repositorio](#estructura-del-repositorio)
+8. [Configuración](#configuración)
+9. [Entorno de desarrollo](#entorno-de-desarrollo)
+10. [Flujo de trabajo: local + Google Colab](#flujo-de-trabajo-local--google-colab)
+11. [Convenciones](#convenciones)
+12. [Estado de implementación](#estado-de-implementación)
+13. [Licencias](#licencias)
+14. [Bibliografía](#bibliografía)
+
+---
+
+## Problema y objetivos
+
+Se busca predecir, a partir de la información disponible hasta un día `t`, el nivel del río
+en cada uno de los días `t+1, t+2, …, t+14`. Este tipo de problema se llama
+**pronóstico multi-paso** (*multi-step forecasting*): el modelo no entrega un único valor,
+sino una trayectoria de 14 valores.
+
+**Variables objetivo (*targets*):**
+
+| Target | Estación | Motivo |
 |---|---|---|
-| ARIMA | statsmodels / pmdarima | Previsto; solo existe el archivo placeholder |
-| LSTM | PyTorch | Previsto; solo existe el archivo placeholder |
-| Árbol / boosting | XGBoost | Elegido sobre LightGBM; solo existe el placeholder |
-| CNN 1D | PyTorch | Prevista; solo existe el archivo placeholder |
-| Transformer | PyTorch | Previsto; solo existe el archivo placeholder |
-| TimesFM 3.0 | `timesfm[torch]` opcional | Previsto para inferencia solamente; sin adaptador implementado |
+| `ciudad_bolivar` | Ciudad Bolívar | Estación de referencia, con el registro histórico más largo (1930–2025). |
+| `palua` | Palúa | Estación aguas abajo; permite evaluar si los modelos generalizan a un punto del río con dinámica distinta. |
 
-## Entorno y comandos
+**Variables predictoras:** niveles rezagados de las estaciones aguas arriba (Ayacucho,
+Caicara), variables cíclicas de calendario, precipitación (NASA) y el estado del fenómeno
+El Niño / La Niña (índice ONI de NOAA).
 
-Se requiere Python 3.12 (fijado en `.python-version`) y `uv`. El stack de tablas es **Polars** (sin pandas) y el de redes es **PyTorch**.
+**Objetivos del proyecto:**
+
+- Construir y comparar seis familias de modelos: ARIMA, ensamble de árboles, LSTM, red
+  convolucional, Transformer y el modelo fundacional de Google (TimesFM).
+- Evaluarlos con un protocolo idéntico y libre de fuga de datos.
+- Medir cada modelo contra modelos de referencia simples (*baselines*).
+- Cuantificar cuánto aportan las variables exógenas (lluvia, ENSO) frente a usar solo la
+  historia del río.
+
+---
+
+## Datos
+
+### Fuentes del río (en `data/raw/`)
+
+| Archivo | Contenido | Rango |
+|---|---|---|
+| `Niveles Orinoco.xlsx` | Niveles diarios de 4 estaciones: `ayacucho`, `caicara`, `ciudad_bolivar`, `palua`. | 1974-01-01 a 2025-02-24 (18 683 días) |
+| `Nivel Orinoco Formateado.csv` | La tabla anterior extendida hasta fin de 2025 con lecturas de Ciudad Bolívar. Las filas desde 2025-02-25 solo traen `ciudad_bolivar`. | 1974-01-01 a 2025-12-31 |
+| `Niveles Del Orinoco Est. Ciudad Bolivar 1930-2025.xlsx` | Histórico de Ciudad Bolívar con años en columnas y días en filas (sin 29 de febrero). | 1930 a 2025 |
+| `dataset_imputado_simpleml.csv.xls` | CSV (pese a la extensión) idéntico a `Niveles Orinoco.xlsx`. | 1974 a 2025 |
+
+La descripción detallada de cada archivo (columnas, nulos, rarezas) está en
+[`data/raw/README.md`](data/raw/README.md). Las estaciones están ordenadas de aguas arriba
+a aguas abajo: **Ayacucho → Caicara → Ciudad Bolívar → Palúa**. Ese orden importa: una
+subida de nivel en Ayacucho llega días después a Ciudad Bolívar, por lo que los niveles
+rezagados de las estaciones superiores son predictores naturales.
+
+### Fuentes exógenas
+
+| Variable | Fuente | Cobertura | Uso |
+|---|---|---|---|
+| Precipitación diaria (`PRECTOTCORR`) | [NASA POWER, API diaria](https://power.larc.nasa.gov/docs/services/api/temporal/daily/) | Desde 1981-01-01 | Lluvia acumulada sobre la cuenca, rezagada. |
+| Precipitación satelital | [NASA GPM IMERG V07](https://gpm.nasa.gov/data/imerg) | Desde junio de 2000 | Alternativa de mayor resolución espacial. |
+| Índice ONI (El Niño / La Niña) | [NOAA CPC](https://www.cpc.ncep.noaa.gov/data/indices/oni.ascii.txt) | Desde 1950 | Estado climático de gran escala; mensual, se lleva a diario con *forward fill*. |
+
+**Consecuencia de la cobertura:** los experimentos con lluvia solo pueden usar datos desde
+1981 (NASA POWER) o desde 2000 (IMERG). Para que la comparación sea justa, los modelos sin
+variables exógenas se evalúan también sobre esa misma ventana temporal.
+
+---
+
+## Arquitectura del pipeline
+
+El proyecto es un pipeline lineal: los datos crudos se cargan y validan, se enriquecen con
+variables predictoras, y un único motor de evaluación ejecuta todos los modelos sobre los
+mismos cortes temporales. Las predicciones de todos los modelos terminan en una tabla con el
+mismo formato, lo que permite calcular las métricas y los gráficos con un solo código.
+
+```mermaid
+flowchart LR
+  RAW[data/raw<br/>Excel / CSV] --> LOAD[data/loading.py<br/>lectura y validación con Polars]
+  NASA[NASA POWER / IMERG] --> EXO[data/exogenous.py<br/>descarga y alineación diaria]
+  ONI[NOAA ONI] --> EXO
+  LOAD --> FEAT[features/<br/>formato long, calendario cíclico]
+  EXO --> FEAT
+  FEAT --> BT[evaluation/backtest.py<br/>cross_validation h=14]
+  BT --> M1[statsforecast<br/>Naive, SeasonalNaive, AutoARIMA]
+  BT --> M2[mlforecast<br/>XGBoost]
+  BT --> M3[neuralforecast<br/>LSTM, TCN, TFT]
+  BT --> M4[timesfm<br/>TimesFM 3.0]
+  M1 & M2 & M3 & M4 --> PRED[data/predictions/ por modelo]
+  PRED --> MET[evaluation/metrics.py<br/>MAE, RMSE, MASE, NSE, KGE]
+  MET --> REP[reports/ y notebooks/]
+```
+
+### El formato común de datos (*long format*)
+
+Todos los modelos reciben y devuelven tablas con el mismo esquema, el que usan las
+librerías de [Nixtla](https://nixtlaverse.nixtla.io/):
+
+| Columna | Significado |
+|---|---|
+| `unique_id` | Serie a la que pertenece la fila (`ciudad_bolivar` o `palua`). |
+| `ds` | Fecha. |
+| `y` | Nivel observado del río (target). |
+| columnas extra | Variables predictoras (estaciones aguas arriba, lluvia, ONI, calendario). |
+
+Ejemplo:
+
+| unique_id | ds | y | ayacucho | caicara |
+|---|---|---|---|---|
+| ciudad_bolivar | 1974-01-01 | 6.89 | 43.34 | 24.98 |
+| ciudad_bolivar | 1974-01-02 | 6.78 | 43.25 | 24.88 |
+| palua | 1974-01-01 | 3.83 | 43.34 | 24.98 |
+
+Los dos targets conviven en la misma tabla y se distinguen por `unique_id`. Esto permite
+entrenar **modelos globales**: un solo modelo que aprende de ambas series a la vez.
+
+La salida de la validación cruzada de cada modelo tiene la forma
+`unique_id, ds, cutoff, y, <predicción>`, donde `cutoff` es el último día de información
+que el modelo tenía disponible al predecir.
+
+### Por qué Nixtla
+
+Las tres librerías de Nixtla (`statsforecast`, `mlforecast`, `neuralforecast`) comparten el
+formato de datos anterior y el mismo método `cross_validation`. Eso garantiza que los seis
+modelos se evalúen exactamente sobre los mismos cortes y con la misma lógica, sin tener que
+programar el ventaneo, el entrenamiento ni el backtesting por separado para cada familia.
+TimesFM no forma parte de Nixtla; se usa con su librería oficial y un adaptador convierte
+su salida al mismo formato.
+
+### Rol de Polars
+
+[Polars](https://pola.rs/) se usa para la carga, limpieza y transformación de datos
+(`data/` y `features/`). `statsforecast` y `mlforecast` aceptan DataFrames de Polars
+directamente; `neuralforecast` documenta entrada en pandas, por lo que en ese punto se
+convierte con `.to_pandas()`.
+
+---
+
+## Modelos
+
+| Familia | Modelo | Librería | Notas |
+|---|---|---|---|
+| Baseline | `Naive` (persistencia) | statsforecast | Predice que el nivel se mantiene igual al último observado. |
+| Baseline | `SeasonalNaive` | statsforecast | Predice el valor del mismo día del año anterior (`season_length=365`). |
+| Series temporales | `AutoARIMA` | statsforecast | Selecciona automáticamente el orden (p, d, q) del modelo ARIMA. |
+| Ensamble de árboles | `XGBRegressor` | mlforecast + xgboost | Gradient boosting sobre lags y variables de calendario. |
+| Recurrente | `LSTM` | neuralforecast | Acepta covariables históricas (`hist_exog_list`). |
+| Convolucional | `TCN` | neuralforecast | Red de convoluciones causales; acepta covariables históricas. |
+| Transformer | `TFT` | neuralforecast | Temporal Fusion Transformer; acepta covariables históricas, futuras y estáticas. |
+| Fundacional (Google) | `TimesFM 3.0` | timesfm | Modelo preentrenado usado *zero-shot* (sin reentrenamiento); acepta covariables. |
+
+**Por qué los baselines son obligatorios:** el Orinoco es un río de gran caudal que cambia
+lentamente, así que la persistencia a 14 días es un competidor difícil de superar. Un
+modelo complejo solo aporta valor si les gana a los baselines; sin ellos, ninguna métrica
+es interpretable.
+
+**Por qué TFT como Transformer:** de los Transformers de `neuralforecast`, TFT es el que
+admite covariables históricas, igual que el LSTM y el TCN. Esto mantiene la comparación
+entre redes en igualdad de condiciones. La tabla de capacidades por modelo está en la
+[documentación de neuralforecast](https://nixtlaverse.nixtla.io/neuralforecast/docs/capabilities/overview.html).
+
+---
+
+## Protocolo de evaluación
+
+### Validación cruzada con origen móvil (*rolling origin*)
+
+Las series temporales no se pueden dividir al azar: un *k-fold* aleatorio entrenaría con el
+futuro y evaluaría con el pasado. En su lugar se usa **origen móvil con ventana
+expandida**:
+
+1. Se elige un punto de corte (`cutoff`) en el pasado.
+2. El modelo se entrena solo con los datos anteriores al corte.
+3. Predice los 14 días siguientes y se compara con lo observado.
+4. El corte avanza `step_size` días y se repite el proceso `n_windows` veces.
+
+```text
+ventana 1:  [========== entrenamiento ==========][14 días test]
+ventana 2:  [============= entrenamiento =============][14 días test]
+ventana 3:  [================ entrenamiento ================][14 días test]
+                                                    ... avanza 30 días cada vez
+```
+
+| Parámetro | Valor | Significado |
+|---|---|---|
+| `horizon` (`h`) | 14 | Días que se pronostican desde cada corte. |
+| `step_size` | 30 | Días que avanza el corte entre ventanas. |
+| `n_windows` | 24 | Número de cortes evaluados (unos dos años de pronósticos). |
+
+Estos valores viven únicamente en `configs/backtest.yaml` y los comparten todos los
+modelos.
+
+### Métricas
+
+| Métrica | Qué mide | Interpretación |
+|---|---|---|
+| MAE | Error absoluto medio, en metros. | Más bajo es mejor. |
+| RMSE | Raíz del error cuadrático medio, en metros. | Penaliza más los errores grandes (crecidas mal predichas). |
+| MASE | MAE escalado por el error de la persistencia en entrenamiento. | Menor que 1 significa que el modelo supera a la persistencia. |
+| NSE | Eficiencia de Nash-Sutcliffe, estándar en hidrología. | 1 es perfecto; 0 equivale a predecir la media; negativo es peor que la media. |
+| KGE | Eficiencia de Kling-Gupta: combina correlación, sesgo y variabilidad. | 1 es perfecto. |
+
+Las métricas se reportan **por paso del horizonte** (`h = 1, …, 14`), por estación y en
+promedio. El error a 1 día y el error a 14 días son problemas distintos, y promediarlos
+esconde dónde falla cada modelo.
+
+---
+
+## Prevención de fuga de datos
+
+La **fuga de datos** (*data leakage*) ocurre cuando el modelo usa, durante el entrenamiento
+o la evaluación, información que no estaría disponible en el momento real de predecir.
+Produce métricas excelentes en el informe y un modelo inútil en la práctica. Reglas del
+proyecto:
+
+1. **Covariables solo rezagadas.** El nivel de Ayacucho, Caicara o la lluvia del día
+   `t+5` no se conoce en el día `t`. Estas variables se declaran como **históricas**
+   (`hist_exog_list` en neuralforecast; lags en mlforecast), de modo que la librería solo
+   usa sus valores hasta el corte.
+2. **Solo las variables de calendario son futuras.** El día del año (codificado como seno y
+   coseno) se conoce de antemano y es la única variable declarada como futura
+   (`futr_exog_list`).
+3. **Preprocesamiento ajustado solo en entrenamiento.** El escalado y la imputación de
+   nulos se calculan dentro de cada ventana, usando únicamente sus datos de entrenamiento.
+   Ningún dato se imputa usando valores posteriores al corte.
+4. **ONI con retraso de publicación.** El índice ONI es un promedio móvil de tres meses que
+   se publica después de que termina el período; se desplaza en el tiempo para usar solo
+   valores que ya estaban publicados en cada fecha.
+5. **Experimentos con "lluvia perfecta" etiquetados como tales.** Si se usa la lluvia
+   observada de los días futuros, el resultado se reporta como cota superior teórica, no
+   como desempeño real.
+
+---
+
+## Estructura del repositorio
+
+```text
+Proyecto-IA-Orinoco/
+├── configs/                     # Toda la configuración del proyecto
+│   ├── data.yaml                # Fuentes de datos: rutas, columnas, formato
+│   ├── backtest.yaml            # Protocolo compartido: horizon, step_size, n_windows
+│   ├── ensemble.yaml            # Combinación de modelos (etapa final, opcional)
+│   └── models/                  # Hiperparámetros por familia
+│       ├── arima.yaml           # AutoARIMA
+│       ├── tree.yaml            # XGBoost + lags
+│       ├── lstm.yaml            # LSTM
+│       ├── cnn.yaml             # TCN
+│       ├── transformer.yaml     # TFT
+│       └── timesfm.yaml         # TimesFM 3.0
+├── data/
+│   ├── raw/                     # Datos originales, inmutables (versionados)
+│   ├── external/                # Descargas de NASA y NOAA (no versionadas)
+│   ├── interim/                 # Datos intermedios (no versionados)
+│   ├── processed/               # Tabla final en formato long (no versionada)
+│   └── predictions/<modelo>/    # Salida de cross_validation por modelo
+├── notebooks/                   # Exploración y presentación de resultados
+├── reports/figures/             # Gráficos finales
+├── scripts/                     # Puntos de entrada por línea de comandos
+│   ├── run_model.py             # Ejecuta el backtest de un modelo configurado
+│   ├── run_ensemble.py          # Combina predicciones guardadas
+│   └── make_report.py           # Genera tablas y gráficos comparativos
+├── src/orinoco_forecast/        # Paquete Python del proyecto
+│   ├── data/
+│   │   ├── loading.py           # Lectura y validación de data/raw
+│   │   └── exogenous.py         # Descarga de NASA POWER / IMERG y ONI
+│   ├── features/
+│   │   ├── lags.py              # Lags de estaciones aguas arriba
+│   │   └── calendar.py          # Variables cíclicas (seno/coseno del día del año)
+│   ├── models/
+│   │   ├── statistical/         # Baselines y AutoARIMA (statsforecast)
+│   │   ├── trees/               # XGBoost (mlforecast)
+│   │   ├── neural/              # LSTM, TCN, TFT (neuralforecast)
+│   │   ├── pretrained/          # Adaptador de TimesFM
+│   │   └── registry.py          # Nombre de modelo -> objeto configurado
+│   ├── evaluation/
+│   │   ├── backtest.py          # Ejecuta cross_validation y guarda predicciones
+│   │   └── metrics.py           # MAE, RMSE, MASE, NSE, KGE
+│   ├── ensemble/                # Promedio y stacking de predicciones
+│   └── utils/                   # E/S, semillas, logging
+├── tests/                       # Pruebas con pytest
+├── pyproject.toml               # Dependencias y configuración de herramientas
+├── uv.lock                      # Versiones exactas resueltas por uv
+├── Makefile                     # Atajos: setup, test, lint, format, clean
+└── AGENTS.md                    # Instrucciones para asistentes de IA
+```
+
+### Responsabilidad de cada capa
+
+| Capa | Recibe | Devuelve | Regla clave |
+|---|---|---|---|
+| `data/` | Archivos de `data/raw/` y APIs externas | DataFrames de Polars validados | Nunca escribe en `data/raw/`; reporta anomalías con warnings en lugar de corregirlas en silencio. |
+| `features/` | DataFrames validados | Tabla en formato long con predictoras | Ninguna feature usa información posterior a su fecha. |
+| `models/` | Configuración YAML | Objetos de Nixtla / TimesFM listos para usar | No contiene lógica de evaluación. |
+| `evaluation/` | Tabla long + modelos | Predicciones por corte y métricas | Es el único lugar que define cómo se parte el tiempo. |
+| `notebooks/` | Funciones de `src/` | Análisis y gráficos | No contienen lógica reutilizable; la importan del paquete. |
+
+---
+
+## Configuración
+
+Toda decisión experimental se declara en `configs/`, no en el código. Así un experimento se
+reproduce leyendo sus YAML.
+
+- **`configs/data.yaml`**: cada fuente declara `name`, `path`, `format`, `date_column`,
+  `target_column`, `freq` y, si aplica, `sheet`, `covariates` o `layout`. Para agregar una
+  fuente nueva se coloca el archivo original en `data/raw/` y se registra aquí.
+- **`configs/backtest.yaml`**: única fuente de `horizon`, `step_size` y `n_windows`. Ningún
+  modelo define su propio horizonte.
+- **`configs/models/*.yaml`**: hiperparámetros de cada familia (por ejemplo `input_size`,
+  `max_steps` y covariables para las redes; `lags` y parámetros de XGBoost para los
+  árboles).
+
+---
+
+## Entorno de desarrollo
+
+### Requisitos
+
+- Python 3.12 (fijado en `.python-version`).
+- [uv](https://docs.astral.sh/uv/) para gestionar el entorno y las dependencias.
+- VS Code con las extensiones de Python, Jupyter y
+  [Google Colab](https://developers.googleblog.com/google-colab-is-coming-to-vs-code/).
+
+### Instalación local
 
 ```bash
 uv sync
-uv run python -c "import torch, polars, statsmodels"
-uv run pytest
-uv run ruff check .
-uv run ruff format .
 ```
 
-Por el alcance de scaffold, pytest encuentra dos pruebas placeholder y las omite;
-todavía no hay pruebas de comportamiento.
+`uv sync` crea el entorno virtual `.venv/` con las versiones exactas de `uv.lock`.
 
-Los pesos de TimesFM 3.0 no se descargan con la instalación normal. Para añadir el paquete de inferencia opcional:
+### Comandos
 
-```bash
-uv sync --extra timesfm
+| Comando | Atajo con Make | Qué hace |
+|---|---|---|
+| `uv sync` | `make setup` | Instala o actualiza el entorno. |
+| `uv run pytest` | `make test` | Ejecuta las pruebas. |
+| `uv run ruff check .` | `make lint` | Revisa estilo y errores comunes. |
+| `uv run ruff format .` | `make format` | Formatea el código. |
+
+En Windows `make` no viene instalado; se pueden usar los comandos `uv` directamente o
+instalarlo con `choco install make` o `scoop install make`.
+
+---
+
+## Flujo de trabajo: local + Google Colab
+
+El código se escribe y prueba en local con datos reducidos; el entrenamiento pesado (redes
+neuronales y TimesFM) se ejecuta en Google Colab para aprovechar sus GPU.
+
+```mermaid
+flowchart LR
+  A[Editar código en VS Code<br/>local] --> B[uv run pytest<br/>uv run ruff check .]
+  B --> C[git commit + git push]
+  C --> D[Notebook en VS Code<br/>con kernel de Colab]
+  D --> E[git clone / git pull<br/>dentro de Colab]
+  E --> F[Entrenamiento y backtest<br/>con GPU]
+  F --> G[Descargar predicciones<br/>y métricas]
 ```
 
-El checkpoint `google/timesfm-3.0-pytorch` tiene la licencia **TimesFM Non-Commercial License v1.0**: los pesos autoalojados son solo para uso no comercial y no productivo. Consulta el [README oficial](https://github.com/google-research/timesfm#license-notice-for-pretrained-weights) y la [tarjeta del modelo](https://huggingface.co/google/timesfm-3.0-pytorch). La licencia del código fuente no sustituye la licencia de los pesos.
+### Dos cosas a tener en cuenta con la extensión de Colab
 
-## Fuentes de datos
+1. **El kernel corre en la máquina de Google, no en tu computadora.** Las rutas locales no
+   existen en Colab, así que el código y los datos deben llegar al runtime clonando el
+   repositorio (o montando Google Drive). Ver el
+   [issue del repositorio oficial](https://github.com/googlecolab/colab-vscode/issues/210).
+2. **En Colab no se usa `uv sync`.** `uv sync` crea un `.venv` que el kernel de Colab no
+   utiliza, y además reinstalaría PyTorch, que Colab ya trae con soporte CUDA. En su lugar,
+   el paquete se instala en el Python del sistema del runtime.
 
-- `data/raw/` contiene entradas originales inmutables. El código solo las lee; las transformaciones futuras deben guardarse en `data/interim/` o `data/processed/`.
-- `configs/data.yaml` registra las fuentes previstas. `src/orinoco_forecast/data/loading.py` es solo un placeholder; la lectura y validación aún no están implementadas.
-- Para declarar una fuente: conserva el original en `data/raw/` y añade en `configs/data.yaml` `name`, `path`, `sheet`, `date_column`, `target_column` y `freq`; agrega `covariates` o `skiprows` si aplica.
-- El libro histórico está organizado por años en columnas; `layout: wide_years` y `date_parts` documentan la conversión prevista, todavía no implementada. `dataset_imputado_simpleml.csv.xls` parece Excel por su sufijo, pero es CSV y coincide con la fuente diaria XLSX.
-
-## Protocolo de comparación
-
-`configs/backtest.yaml` es la única fuente de `horizon` y `context_length`, compartidos por todos los modelos. Los YAML describen el protocolo walk-forward y los parámetros previstos; no hay evaluador ni modelos implementados.
-
-Los archivos de `scripts/` también son placeholders: todavía no son CLIs ejecutables.
-
-## Estructura
-
-```text
-configs/                    # datos, backtest, modelos y ensamble
- data/                      # raw versionado; interim/processed/predictions ignorados
- notebooks/
-  src/orinoco_forecast/      # módulos placeholder
-  scripts/                   # archivos CLI placeholder
- tests/
- artifacts/                 # checkpoints locales, fuera de git
- reports/figures/
-```
-
-## Makefile
-
-Objetivos disponibles: `make setup`, `make test`, `make lint`, `make format` y `make clean`.
-
-### Windows local
-
-`make` no viene preinstalado en Windows. Opciones:
-
-1. Ejecutar los comandos uv equivalentes directamente (ver sección "Entorno y comandos"): `uv sync` = `make setup`, `uv run pytest` = `make test`, `uv run ruff check .` = `make lint`, `uv run ruff format .` = `make format`.
-2. Instalar GNU Make una sola vez (`choco install make` o `scoop install make`) y usar `make <objetivo>` desde PowerShell igual que en Linux.
-
-### Google Colab / Linux
-
-`make` ya está disponible; `uv` no. En la primera celda del notebook:
+### Primera celda de un notebook en Colab
 
 ```python
-!curl -LsSf https://astral.sh/uv/install.sh | sh
-!make setup
-!make test
-!make lint
+!git clone https://github.com/Cesar2926/Proyecto-IA-Orinoco.git
+%cd Proyecto-IA-Orinoco
+!git checkout <rama-de-trabajo>
+!pip install -q uv
+!uv pip install --system -e .
 ```
 
-En celdas siguientes conviene `%%bash` + `make <objetivo>`. `uv sync` descarga automáticamente el Python 3.12 gestionado por uv.
+Si el repositorio es privado, la clonación requiere autenticación con un token personal de
+GitHub. Nunca escribas el token directamente en una celda que se vaya a versionar.
 
-Cada target del `Makefile` solo envuelve los mismos comandos uv, así que el resultado es idéntico en local y en Colab.
+En sesiones posteriores basta con `!git pull` dentro de la carpeta del proyecto. Los
+runtimes de Colab se reinician periódicamente: lo que no esté en el repositorio, en Google
+Drive o descargado se pierde.
+
+### Notebooks
+
+Los notebooks se nombran con un número de orden, las iniciales del autor y una
+descripción, por ejemplo `01-ac-exploracion-niveles.ipynb`. Importan las funciones del
+paquete (`from orinoco_forecast.data.loading import load_source`) en lugar de copiar
+código entre notebooks.
+
+---
+
+## Convenciones
+
+- **`data/raw/` es inmutable.** Ningún código escribe ahí; los derivados van a
+  `data/interim/` o `data/processed/`.
+- **Idioma:** identificadores de código en inglés; docstrings, mensajes y documentación en
+  español.
+- **Commits** pequeños con prefijo [Conventional Commits](https://www.conventionalcommits.org/es/v1.0.0/):
+  `feat:`, `fix:`, `docs:`, `chore:`, `test:`.
+- **Ramas:** el trabajo se hace en ramas propias y se integra a `main` mediante pull
+  request revisado por otro integrante.
+- **Reproducibilidad:** semillas fijas para los modelos con aleatoriedad y versiones
+  exactas en `uv.lock`.
+
+---
+
+## Estado de implementación
+
+| Componente | Estado |
+|---|---|
+| Estructura de carpetas, configuración y entorno con uv | Disponible |
+| Auditoría de datos crudos (`data/raw/README.md`) | Disponible |
+| Carga y validación de datos (`data/loading.py`) | Pendiente |
+| Descarga de NASA POWER / IMERG y ONI (`data/exogenous.py`) | Pendiente |
+| Formato long y variables predictoras (`features/`) | Pendiente |
+| Métricas MAE, RMSE, MASE, NSE, KGE | Pendiente |
+| Baselines y AutoARIMA (statsforecast) | Pendiente |
+| XGBoost (mlforecast) | Pendiente |
+| LSTM, TCN, TFT (neuralforecast) | Pendiente |
+| TimesFM 3.0 | Pendiente |
+| Comparación final y reporte | Pendiente |
+| Ensamble de modelos | Opcional, al final |
+
+El orden de trabajo previsto es el de la tabla: primero datos, métricas y baselines, luego
+los modelos de menor a mayor costo computacional, y al final las variables exógenas para
+medir cuánto aportan.
+
+---
+
+## Licencias
+
+El checkpoint `google/timesfm-3.0-pytorch` se distribuye bajo la **TimesFM Non-Commercial
+License v1.0**: los pesos solo pueden usarse con fines no comerciales y no productivos, lo
+que es compatible con este proyecto académico. La licencia del código fuente de TimesFM no
+sustituye a la de los pesos. Ver el
+[README oficial](https://github.com/google-research/timesfm) y la
+[tarjeta del modelo](https://huggingface.co/google/timesfm-3.0-pytorch).
+
+---
+
+## Bibliografía
+
+### Libros
+
+- Hyndman, R. J. y Athanasopoulos, G. *Forecasting: Principles and Practice*, 3.ª ed.
+  [Edición en línea](https://otexts.com/fpp3/). Su edición en Python,
+  *Forecasting: Principles and Practice, the Pythonic Way*, usa las librerías de Nixtla
+  ([anuncio](https://forecasters.org/blog/2025/04/25/forecasting-principles-and-practice-the-pythonic-way)).
+- Géron, A. *Hands-On Machine Learning with Scikit-Learn and PyTorch*. O'Reilly, 2025.
+  [O'Reilly](https://oreilly.com/library/view/hands-on-machine-learning/9798341607972/).
+- Huyen, C. *Designing Machine Learning Systems*. O'Reilly, 2022.
+  [O'Reilly](https://oreilly.com/library/view/designing-machine-learning/9781098107956).
+- Box, G., Jenkins, G., Reinsel, G. y Ljung, G. *Time Series Analysis: Forecasting and
+  Control*, 5.ª ed. Wiley, 2015.
+
+### Guías
+
+- Zinkevich, M. [*Rules of Machine Learning*](https://developers.google.com/machine-learning/guides/rules-of-ml). Google.
+- scikit-learn. [*Common pitfalls and recommended practices*](https://scikit-learn.org/stable/common_pitfalls.html) (fuga de datos en preprocesamiento).
+- DrivenData. [*Cookiecutter Data Science*](https://cookiecutter-data-science.drivendata.org/opinions/) (organización de proyectos de ciencia de datos).
+
+### Artículos
+
+- Ben Taieb, S., Bontempi, G., Atiya, A. y Sorjamaa, A. (2012). A review and comparison of
+  strategies for multi-step ahead time series forecasting. *Expert Systems with
+  Applications*, 39(8). [Enlace](https://research.monash.edu/en/publications/a-review-and-comparison-of-strategies-for-multi-step-ahead-time-s/).
+- Hyndman, R. J. y Koehler, A. B. (2006). Another look at measures of forecast accuracy
+  (MASE). *International Journal of Forecasting*, 22(4).
+  [DOI](https://www.doi.org/10.1016/J.IJFORECAST.2006.03.001).
+- Nash, J. E. y Sutcliffe, J. V. (1970). River flow forecasting through conceptual models
+  (NSE). *Journal of Hydrology*, 10(3). [Enlace](https://explore.openalex.org/works/w2033904036).
+- Gupta, H. V. et al. (2009). Decomposition of the mean squared error and NSE performance
+  criteria (KGE). *Journal of Hydrology*, 377.
+  [PDF](https://ag.purdue.edu/hydrology/wiki/environmental-informatics/modeling-resources/attachments/gupta-et-al-2009.pdf).
+- Hochreiter, S. y Schmidhuber, J. (1997). Long Short-Term Memory. *Neural Computation*,
+  9(8). [Enlace](https://mlanthology.org/neco/1997/hochreiter1997neco-long).
+- Vaswani, A. et al. (2017). Attention Is All You Need. *NeurIPS*.
+  [Enlace](https://proceedings.neurips.cc/paper/7181-attention-is-all).
+- Kratzert, F. et al. (2018). Rainfall–runoff modelling using Long Short-Term Memory
+  networks. *Hydrology and Earth System Sciences*, 22.
+  [Enlace](https://hess.copernicus.org/articles/22/6005/2018/).
+- Zeng, A. et al. (2023). Are Transformers Effective for Time Series Forecasting? *AAAI*.
+  [Enlace](https://ojs.aaai.org/index.php/AAAI/article/view/26317).
+- Das, A., Kong, W., Sen, R. y Zhou, Y. (2024). A decoder-only foundation model for
+  time-series forecasting (TimesFM). *ICML*.
+  [Enlace](https://proceedings.mlr.press/v235/das24c.html).
+- Nearing, G. et al. (2024). Global prediction of extreme floods in ungauged watersheds.
+  *Nature*, 627. [Enlace](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC10954541/).
+- Makridakis, S., Spiliotis, E. y Assimakopoulos, V. (2022). M5 accuracy competition:
+  Results, findings, and conclusions. *International Journal of Forecasting*, 38(4).
+  [Enlace](https://ideas.repec.org/a/eee/intfor/v38y2022i4p1346-1364.html).
+
+### Documentación de herramientas
+
+- [statsforecast](https://nixtlaverse.nixtla.io/statsforecast/) ·
+  [mlforecast](https://nixtlaverse.nixtla.io/mlforecast/) ·
+  [neuralforecast](https://nixtlaverse.nixtla.io/neuralforecast/) ·
+  [TimesFM](https://github.com/google-research/timesfm) ·
+  [Polars](https://docs.pola.rs/) ·
+  [uv](https://docs.astral.sh/uv/)
