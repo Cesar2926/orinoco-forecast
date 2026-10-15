@@ -2,9 +2,10 @@
 
 Pronóstico del nivel diario del río Orinoco con **14 días de anticipación**, desarrollado
 para la materia *Inteligencia Artificial: Aprendizaje Automático* (UCAB). El proyecto
-compara seis familias de modelos bajo un mismo protocolo de evaluación cronológica para
-responder una pregunta concreta: **¿qué tipo de modelo predice mejor el comportamiento del
-río a dos semanas, y cuánto mejora respecto a una predicción ingenua?**
+evalúa seis familias de modelos bajo un mismo protocolo de evaluación cronológica y
+**selecciona uno como modelo final**, respondiendo una pregunta concreta: **¿qué modelo
+predice mejor el comportamiento del río a dos semanas, y cuánto mejora respecto a una
+predicción ingenua?**
 
 > **Estado:** en construcción. La sección [Estado de implementación](#estado-de-implementación)
 > indica qué partes ya funcionan y cuáles están pendientes.
@@ -50,10 +51,12 @@ El Niño / La Niña (índice ONI de NOAA).
 
 **Objetivos del proyecto:**
 
-- Construir y comparar seis familias de modelos: ARIMA, ensamble de árboles, LSTM, red
+- Construir y evaluar seis familias de modelos: ARIMA, ensamble de árboles, LSTM, red
   convolucional, Transformer y el modelo fundacional de Google (TimesFM).
 - Evaluarlos con un protocolo idéntico y libre de fuga de datos.
 - Medir cada modelo contra modelos de referencia simples (*baselines*).
+- **Seleccionar un único modelo final** con un criterio definido antes de ver los
+  resultados, y medir su desempeño una sola vez en un período de test reservado.
 - Cuantificar cuánto aportan las variables exógenas (lluvia, ENSO) frente a usar solo la
   historia del río.
 
@@ -63,18 +66,61 @@ El Niño / La Niña (índice ONI de NOAA).
 
 ### Fuentes del río (en `data/raw/`)
 
-| Archivo | Contenido | Rango |
-|---|---|---|
-| `Niveles Orinoco.xlsx` | Niveles diarios de 4 estaciones: `ayacucho`, `caicara`, `ciudad_bolivar`, `palua`. | 1974-01-01 a 2025-02-24 (18 683 días) |
-| `Nivel Orinoco Formateado.csv` | La tabla anterior extendida hasta fin de 2025 con lecturas de Ciudad Bolívar. Las filas desde 2025-02-25 solo traen `ciudad_bolivar`. | 1974-01-01 a 2025-12-31 |
-| `Niveles Del Orinoco Est. Ciudad Bolivar 1930-2025.xlsx` | Histórico de Ciudad Bolívar con años en columnas y días en filas (sin 29 de febrero). | 1930 a 2025 |
-| `dataset_imputado_simpleml.csv.xls` | CSV (pese a la extensión) idéntico a `Niveles Orinoco.xlsx`. | 1974 a 2025 |
+| Archivo | Contenido | Rango | Uso en el proyecto |
+|---|---|---|---|
+| `Niveles Orinoco.xlsx` | Niveles diarios de 4 estaciones: `ayacucho`, `caicara`, `ciudad_bolivar`, `palua`. | 1974-01-01 a 2025-02-24 (18 683 días) | **Fuente principal.** Es la única con las cuatro estaciones alineadas día a día. |
+| `Niveles Del Orinoco Est. Ciudad Bolivar 1930-2025.xlsx` | Histórico de Ciudad Bolívar con años en columnas y días en filas (sin 29 de febrero). | 1930 a 2025 | Extiende Ciudad Bolívar hasta 2025-12-31 y sirve para detectar valores imputados en la fuente principal. |
+| `Nivel Orinoco Formateado.csv` | La fuente principal extendida a mano hasta 2025-12-31 con lecturas del histórico. | 1974-01-01 a 2025-12-31 | No se usa: el pipeline la reproduce con código a partir de las dos fuentes anteriores. |
+| `dataset_imputado_simpleml.csv.xls` | CSV (pese a la extensión) idéntico, celda por celda, a `Niveles Orinoco.xlsx`. | 1974 a 2025 | No se usa: es un duplicado. |
 
 La descripción detallada de cada archivo (columnas, nulos, rarezas) está en
 [`data/raw/README.md`](data/raw/README.md). Las estaciones están ordenadas de aguas arriba
 a aguas abajo: **Ayacucho → Caicara → Ciudad Bolívar → Palúa**. Ese orden importa: una
 subida de nivel en Ayacucho llega días después a Ciudad Bolívar, por lo que los niveles
 rezagados de las estaciones superiores son predictores naturales.
+
+### Calidad de los datos
+
+La auditoría de las fuentes encontró lo siguiente:
+
+| Hallazgo | Detalle |
+|---|---|
+| Nulos en la fuente principal | Ayacucho, Caicara y Ciudad Bolívar: ninguno. Palúa: 17, casi todos el 29 de febrero de años bisiestos (1976–1996); el hueco más largo es de 3 días. |
+| Fuente principal ya procesada | `Niveles Orinoco.xlsx` es idéntico a `dataset_imputado_simpleml`. Donde el histórico de Ciudad Bolívar tiene nulos (por ejemplo en 2021), la fuente principal tiene valores con forma de interpolación. No es posible distinguir valores observados de imputados en Ayacucho, Caicara y Palúa. |
+| Conflicto entre fuentes de Ciudad Bolívar | Coinciden casi exactamente en 1984–1986 y 1998–2025. Difieren entre 5 y 12 cm en 1974–1982, y de forma importante en **1987** (mayo–diciembre, error medio de 0,83 m) y **1997** (error medio de 1,22 m, con aparente desfase de fechas). |
+| Valores repetidos sospechosos | Ciudad Bolívar repite 2,78 m durante 19 días desde 2020-03-25; Palúa repite 1,8 m durante 16 días desde 1996-04-08. Un río no se queda inmóvil tantos días: son nulos disfrazados. |
+| Hueco largo en el histórico | 161 días sin datos entre 1933-10-11 y 1934-03-20. |
+
+**Limitación declarada:** los datos de base ya traían una imputación de origen
+desconocido. Los resultados del proyecto deben leerse con esa salvedad.
+
+#### Tratamiento
+
+Ningún valor de `data/raw/` se modifica. Al extraer los datos a `data/interim/`, cada valor
+recibe una etiqueta en la columna `quality`:
+
+| Etiqueta | Significado |
+|---|---|
+| `observed` | Valor tal como viene de la fuente. |
+| `missing` | Sin valor. |
+| `suspect_flat` | Forma parte de una racha de 10 o más días con el mismo valor exacto. |
+| `suspect_jump` | Cambio diario anormalmente grande respecto a los días vecinos. |
+| `source_conflict` | Las dos fuentes de Ciudad Bolívar difieren de forma importante (1987, 1997). |
+
+Las etiquetas hacen explícita cada decisión y permiten revertirla cambiando una regla, en
+lugar de corregir los archivos a mano. Los huecos se tratan según su tipo:
+
+| Tipo de hueco | Tratamiento | Motivo |
+|---|---|---|
+| 1 a 3 días | Interpolación lineal en el tiempo | El río cambia pocos centímetros por día; el error es despreciable. |
+| Racha `suspect_flat` | Se convierte en nulo y se trata como hueco de esa longitud | Dejarla enseñaría al modelo que el río puede quedarse inmóvil. |
+| Hueco largo (meses) | No se rellena; la serie se recorta | Interpolar meses es inventar una temporada completa. |
+| Ciudad Bolívar sin estaciones vecinas (desde 2025-02-25) | No se imputan las estaciones vecinas | Ese tramo solo sirve a los modelos que usan únicamente Ciudad Bolívar. |
+
+Se descartaron rellenar con la media (destruye la estacionalidad), repetir el último valor
+(crea las mismas rachas planas que se buscan eliminar) e imputar con un modelo de ML (más
+complejo y propenso a fuga de datos, sin ventaja para huecos de pocos días). La imputación
+se aplica dentro de cada ventana de entrenamiento, nunca sobre la serie completa.
 
 ### Ubicación de las estaciones
 
@@ -205,11 +251,33 @@ entre redes en igualdad de condiciones. La tabla de capacidades por modelo está
 
 ## Protocolo de evaluación
 
+### División temporal: validación y test final
+
+El objetivo es elegir un modelo, y elegir con los mismos datos con que se reporta el
+resultado produce **sesgo de selección** (*selection bias*): el modelo ganador parece mejor
+de lo que es, porque parte de su ventaja es haber encajado por azar con esos datos. Por eso
+el tiempo se divide en bloques con funciones distintas:
+
+```text
+|------------ entrenamiento ------------|--- validación ---|--- test final ---|
+ 1974                                                    test_start      2025-02-24
+```
+
+| Bloque | Para qué se usa | Qué modelos lo ven |
+|---|---|---|
+| Entrenamiento | Ajustar los modelos. | Los seis modelos y los baselines. |
+| Validación | Ventanas de backtest para comparar modelos, ajustar hiperparámetros y **elegir el modelo final**. | Los seis modelos y los baselines. |
+| Test final | Medir **una sola vez** el desempeño del modelo ya elegido. | Solo el modelo seleccionado y los baselines como referencia. |
+
+El test final no se consulta hasta que la elección está cerrada. Si después de verlo se
+cambia el modelo, el test deja de medir el desempeño real y el resultado reportado vuelve a
+estar sesgado.
+
 ### Validación cruzada con origen móvil (*rolling origin*)
 
 Las series temporales no se pueden dividir al azar: un *k-fold* aleatorio entrenaría con el
-futuro y evaluaría con el pasado. En su lugar se usa **origen móvil con ventana
-expandida**:
+futuro y evaluaría con el pasado. Dentro del bloque de validación se usa **origen móvil con
+ventana expandida**:
 
 1. Se elige un punto de corte (`cutoff`) en el pasado.
 2. El modelo se entrena solo con los datos anteriores al corte.
@@ -227,7 +295,8 @@ ventana 3:  [================ entrenamiento ================][14 días test]
 |---|---|---|
 | `horizon` (`h`) | 14 | Días que se pronostican desde cada corte. |
 | `step_size` | 30 | Días que avanza el corte entre ventanas. |
-| `n_windows` | 24 | Número de cortes evaluados (unos dos años de pronósticos). |
+| `n_windows` | 24 | Número de cortes evaluados (unos dos años de pronósticos), todos anteriores a `test_start`. |
+| `test_start` | 2023-01-01 | Primer día del test final; desde aquí hasta 2025-02-24 queda reservado. |
 
 Estos valores viven únicamente en `configs/backtest.yaml` y los comparten todos los
 modelos.
@@ -245,6 +314,24 @@ modelos.
 Las métricas se reportan **por paso del horizonte** (`h = 1, …, 14`), por estación y en
 promedio. El error a 1 día y el error a 14 días son problemas distintos, y promediarlos
 esconde dónde falla cada modelo.
+
+### Criterio de selección del modelo final
+
+El criterio se fija antes de ver los resultados. Si se define después, siempre se encuentra
+uno que favorezca al modelo preferido.
+
+1. **Requisito mínimo:** el modelo debe superar a la persistencia (MASE < 1) en ambas
+   estaciones, sobre el bloque de validación. Si ningún modelo lo cumple, ese es el
+   resultado principal del proyecto.
+2. **Métrica principal:** MAE promedio de `h = 1` a `14`, promediado entre Ciudad Bolívar y
+   Palúa, sobre las ventanas de validación.
+3. **Desempate**, si dos modelos quedan a pocos centímetros, en este orden:
+   - menor error en los días 10 a 14, el tramo que realmente exige el problema;
+   - menor error durante crecidas;
+   - menor complejidad y costo de entrenamiento.
+
+El modelo elegido se evalúa después una única vez en el test final, junto a los baselines.
+Ese número es el que se reporta como desempeño esperado.
 
 ---
 
@@ -271,6 +358,8 @@ proyecto:
 5. **Experimentos con "lluvia perfecta" etiquetados como tales.** Si se usa la lluvia
    observada de los días futuros, el resultado se reporta como cota superior teórica, no
    como desempeño real.
+6. **La selección solo usa validación.** Elegir el modelo, sus hiperparámetros o sus
+   variables mirando el test final es fuga de datos aplicada a la decisión.
 
 ---
 
@@ -280,8 +369,8 @@ proyecto:
 Proyecto-IA-Orinoco/
 ├── configs/                     # Toda la configuración del proyecto
 │   ├── data.yaml                # Fuentes de datos: rutas, columnas, formato
-│   ├── backtest.yaml            # Protocolo compartido: horizon, step_size, n_windows
-│   ├── ensemble.yaml            # Combinación de modelos (etapa final, opcional)
+│   ├── backtest.yaml            # Protocolo compartido: horizon, ventanas, test_start
+│   ├── ensemble.yaml            # Combinación de modelos (experimento opcional)
 │   └── models/                  # Hiperparámetros por familia
 │       ├── arima.yaml           # AutoARIMA
 │       ├── tree.yaml            # XGBoost + lags
@@ -299,8 +388,8 @@ Proyecto-IA-Orinoco/
 ├── reports/figures/             # Gráficos finales
 ├── scripts/                     # Puntos de entrada por línea de comandos
 │   ├── run_model.py             # Ejecuta el backtest de un modelo configurado
-│   ├── run_ensemble.py          # Combina predicciones guardadas
-│   └── make_report.py           # Genera tablas y gráficos comparativos
+│   ├── run_ensemble.py          # Combina predicciones (experimento opcional)
+│   └── make_report.py           # Tablas comparativas, selección y test final
 ├── src/orinoco_forecast/        # Paquete Python del proyecto
 │   ├── data/
 │   │   ├── loading.py           # Lectura y validación de data/raw
@@ -317,7 +406,7 @@ Proyecto-IA-Orinoco/
 │   ├── evaluation/
 │   │   ├── backtest.py          # Ejecuta cross_validation y guarda predicciones
 │   │   └── metrics.py           # MAE, RMSE, MASE, NSE, KGE
-│   ├── ensemble/                # Promedio y stacking de predicciones
+│   ├── ensemble/                # Promedio y stacking (experimento opcional)
 │   └── utils/                   # E/S, semillas, logging
 ├── tests/                       # Pruebas con pytest
 ├── pyproject.toml               # Dependencias y configuración de herramientas
@@ -346,7 +435,7 @@ reproduce leyendo sus YAML.
 - **`configs/data.yaml`**: cada fuente declara `name`, `path`, `format`, `date_column`,
   `target_column`, `freq` y, si aplica, `sheet`, `covariates` o `layout`. Para agregar una
   fuente nueva se coloca el archivo original en `data/raw/` y se registra aquí.
-- **`configs/backtest.yaml`**: única fuente de `horizon`, `step_size` y `n_windows`. Ningún
+- **`configs/backtest.yaml`**: única fuente de `horizon`, `step_size`, `n_windows` y `test_start`. Ningún
   modelo define su propio horizonte.
 - **`configs/models/*.yaml`**: hiperparámetros de cada familia (por ejemplo `input_size`,
   `max_steps` y covariables para las redes; `lags` y parámetros de XGBoost para los
@@ -465,8 +554,10 @@ código entre notebooks.
 | XGBoost (mlforecast) | Pendiente |
 | LSTM, TCN, TFT (neuralforecast) | Pendiente |
 | TimesFM 3.0 | Pendiente |
-| Comparación final y reporte | Pendiente |
-| Ensamble de modelos | Opcional, al final |
+| Extracción a formato largo con columna `quality` | Pendiente |
+| Comparación en validación y selección del modelo final | Pendiente |
+| Evaluación del modelo elegido en el test final y reporte | Pendiente |
+| Ensamble de modelos | Fuera del alcance; experimento opcional |
 
 El orden de trabajo previsto es el de la tabla: primero datos, métricas y baselines, luego
 los modelos de menor a mayor costo computacional, y al final las variables exógenas para
