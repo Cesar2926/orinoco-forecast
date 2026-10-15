@@ -76,6 +76,25 @@ a aguas abajo: **Ayacucho → Caicara → Ciudad Bolívar → Palúa**. Ese orde
 subida de nivel en Ayacucho llega días después a Ciudad Bolívar, por lo que los niveles
 rezagados de las estaciones superiores son predictores naturales.
 
+### Ubicación de las estaciones
+
+Coordenadas aproximadas de cada localidad según Google Maps (no son las coordenadas
+oficiales de las reglas limnimétricas). El Orinoco corre hacia el este en este tramo, así
+que una longitud mayor (menos negativa) indica una posición más aguas abajo.
+
+| Estación | Localidad en Google Maps | Latitud | Longitud |
+|---|---|---|---|
+| Ayacucho | Puerto Ayacucho, Amazonas | 5.66 | -67.62 |
+| Caicara | Caicara del Orinoco, Bolívar | 7.61 | -66.15 |
+| Ciudad Bolívar | Ciudad Bolívar, Bolívar | 8.09 | -63.56 |
+| Palúa | Puerto de Palúa (Ferrominera), Ciudad Guayana | 8.32 | -62.75 |
+
+Palúa queda unos 5 km aguas arriba de la confluencia con el río Caroní (8.35, -62.72),
+cuyo caudal está regulado por las represas del Bajo Caroní. Por estar tan cerca, su nivel
+podría verse afectado por el remanso (*backwater*) del Caroní; es una hipótesis a
+contrastar con los datos, no un hecho verificado. Estas coordenadas sirven también para
+consultar la precipitación puntual en NASA POWER.
+
 ### Fuentes exógenas
 
 | Variable | Fuente | Cobertura | Uso |
