@@ -27,8 +27,7 @@ def _frame(values: list[float | None], uid: str = "a") -> pl.DataFrame:
 
 
 def _labels(df: pl.DataFrame, **kwargs) -> list[str]:
-    with pytest.warns(UserWarning, match="suspect_flat"):
-        out = label_quality(df, thresholds=THRESHOLDS, **kwargs)
+    out = label_quality(df, thresholds=THRESHOLDS, **kwargs)
     return out["quality"].cast(pl.String).to_list()
 
 
@@ -44,8 +43,7 @@ def test_labels_constant() -> None:
 
 def test_output_keeps_rows_and_adds_enum_column() -> None:
     df = _frame([1.0, 2.0, 3.0])
-    with pytest.warns(UserWarning, match="suspect_flat"):
-        out = label_quality(df, thresholds=THRESHOLDS)
+    out = label_quality(df, thresholds=THRESHOLDS)
     assert out.drop("quality").equals(df)
     assert out.schema["quality"] == pl.Enum(QUALITY_LABELS)
 
@@ -97,9 +95,18 @@ def test_precedence_missing_conflict_jump() -> None:
     ]
 
 
-def test_default_thresholds_come_from_config() -> None:
+def test_flat_run_labelled_and_below_conflict() -> None:
+    df = _frame([2.0] + [1.0] * 10 + [1.1])
+    reference = _frame([2.0, 5.0] + [1.0] * 10)
     with pytest.warns(UserWarning, match="suspect_flat"):
-        out = label_quality(_frame([1.0, 2.5]))
+        labels = _labels(df, reference=reference)
+    assert labels == ["observed", "source_conflict"] + ["suspect_flat"] * 9 + [
+        "observed"
+    ]
+
+
+def test_default_thresholds_come_from_config() -> None:
+    out = label_quality(_frame([1.0, 2.5]))
     assert out["quality"].cast(pl.String).to_list() == ["observed", "suspect_jump"]
 
 
@@ -137,10 +144,6 @@ def test_real_conflicts_only_on_reference_station(labelled: pl.DataFrame) -> Non
     assert others.filter(pl.col("quality") == "source_conflict").height == 0
 
 
-SKIP_FLAT = pytest.mark.skip(reason="Ejercicio pendiente: implementar find_flat_runs")
-
-
-@SKIP_FLAT
 def test_find_flat_runs_detects_run_of_min_days() -> None:
     values = pl.Series([1.0, 2.0] + [3.0] * 10 + [4.0])
     assert find_flat_runs(values, 10).to_list() == [False, False] + [True] * 10 + [
@@ -148,14 +151,12 @@ def test_find_flat_runs_detects_run_of_min_days() -> None:
     ]
 
 
-@SKIP_FLAT
 def test_find_flat_runs_ignores_changing_and_short_runs() -> None:
     values = pl.Series([1.0, 1.0, 1.0, 2.0, None, None, None, 3.0])
     assert not find_flat_runs(values, 3)[3:].any()
     assert find_flat_runs(pl.Series([float(i) for i in range(20)]), 2).sum() == 0
 
 
-@SKIP_FLAT
 @pytest.mark.parametrize(
     ("uid", "start", "length"),
     [("ciudad_bolivar", date(2020, 3, 25), 19), ("palua", date(1996, 4, 8), 16)],

@@ -38,26 +38,32 @@ def find_flat_runs(values: pl.Series, min_days: int) -> pl.Series:
     - Los nulos nunca forman ni extienden una racha y siempre devuelven ``False``.
     - No modifica ``values``.
     """
-    raise NotImplementedError("Ejercicio: ver docstring")
+    v = pl.col("v")
+    # rle_id gives one id per run of consecutive equal values (nulls included).
+    return (
+        pl.DataFrame({"v": values})
+        .select(((pl.len().over(v.rle_id()) >= min_days) & v.is_not_null()).alias("f"))
+        .to_series()
+    )
 
 
 def _flat_mask(df: pl.DataFrame, min_days: int) -> pl.Series:
     parts = df.with_row_index("_row").partition_by("unique_id", maintain_order=True)
-    try:
-        masks = [
-            part.select("_row").with_columns(
-                find_flat_runs(part["y"], min_days).alias("_flat")
-            )
-            for part in parts
-        ]
-    except NotImplementedError:
+    masks = [
+        part.select("_row").with_columns(
+            find_flat_runs(part["y"], min_days).alias("_flat")
+        )
+        for part in parts
+    ]
+    flat = pl.concat(masks).sort("_row")["_flat"]
+    if flat.any():
         warnings.warn(
-            "find_flat_runs no está implementado: no se evaluó suspect_flat.",
+            f"{int(flat.sum())} valores en rachas planas de {min_days}+ días "
+            "marcados como suspect_flat.",
             DataQualityWarning,
             stacklevel=3,
         )
-        return pl.Series("_flat", [False] * df.height)
-    return pl.concat(masks).sort("_row")["_flat"]
+    return flat
 
 
 def label_quality(
