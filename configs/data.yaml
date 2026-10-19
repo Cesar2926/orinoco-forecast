@@ -41,6 +41,7 @@ sources:
     sheet: NIVELES
     date_column: fecha
     target_column: nivel_m
+    unique_id: ciudad_bolivar # Station name used in the long table.
     freq: D
     format: excel
     layout: wide_years
