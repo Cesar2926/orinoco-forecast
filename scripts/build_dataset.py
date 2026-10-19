@@ -53,7 +53,13 @@ def main() -> None:
     totals = totals.select(
         "unique_id", *(c for c in QUALITY_LABELS if c in totals.columns)
     )
-    with pl.Config(tbl_rows=-1, tbl_cols=-1, tbl_hide_dataframe_shape=True):
+    # ASCII borders: Windows consoles default to cp1252 and cannot encode box chars.
+    with pl.Config(
+        tbl_rows=-1,
+        tbl_cols=-1,
+        tbl_hide_dataframe_shape=True,
+        tbl_formatting="ASCII_FULL_CONDENSED",
+    ):
         print(f"Escrito {INTERIM / 'levels_long.parquet'} ({levels.height} filas)")
         print(f"Escrito {INTERIM / 'quality_summary.csv'} ({summary.height} filas)")
         print(spans)
