@@ -61,5 +61,5 @@ Celdas siguientes pueden usar `%%bash` + `make <objetivo>`. `uv sync` descargar�
 
 - Mensajes de warning y docstrings en español; identificadores de código en inglés.
 - Commits pequeños y descriptivos estilo `chore:`/`feat:`/`docs:`; no hacer push a ramas principales.
-- Configuración compartida (`horizon`, `context_length`) vive solo en `configs/backtest.yaml`; los hiperparámetros por modelo en `configs/models/`.
+- Configuración compartida (`horizon`, `step_size`, `n_windows`, `test_start`) vive solo en `configs/backtest.yaml`; los hiperparámetros por modelo (incluida la ventana de entrada) en `configs/models/`.
 - El archivo raíz `Niveles Orinoco.csv` y la edición previa de `data/raw/Niveles Orinoco.xlsx` son cambios locales del usuario: no commitearlos ni borrarlos sin instrucción.
