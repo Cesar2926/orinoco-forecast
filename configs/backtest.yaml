@@ -1,8 +1,8 @@
 # Shared chronological protocol; models must not shuffle time-series rows.
+# Input window lengths are per-model hyperparameters (configs/models/).
 source: orinoco_stations
-horizon: 30 # Daily forecast horizon, shared by every model.
-context_length: 365 # Shared one-year context for every model.
-n_splits: 5 # Walk-forward folds.
-initial_train_size: 10950 # About 30 years; adjust for shorter sources.
-step_size: 365 # Advance one year per fold.
-seasonality: 365 # Seasonal-naive period used by MASE once implemented.
+horizon: 14 # Daily forecast horizon, shared by every model.
+step_size: 30 # Days between consecutive cross-validation cutoffs.
+n_windows: 24 # Rolling-origin windows evaluated before test_start.
+test_start: "2023-01-01" # Held-out test period; never used for model selection.
+seasonality: 365 # SeasonalNaive period and MASE scaling.

@@ -1,4 +1,13 @@
 # Raw inputs are immutable. Paths are relative to the repository root.
+# Forecast targets (unique_id values in the long table).
+targets: [ciudad_bolivar, palua]
+
+# Thresholds used by orinoco_forecast.data.quality.label_quality (metres, days).
+quality:
+  flat_min_days: 10 # Identical consecutive values for at least this many days.
+  jump_max_m_per_day: 1.0 # Absolute day-over-day change above this is suspect.
+  source_conflict_m: 0.3 # Primary vs historical Ciudad Bolivar disagreement.
+
 sources:
   - name: orinoco_stations
     path: "data/raw/Niveles Orinoco.xlsx"
@@ -8,6 +17,7 @@ sources:
     freq: D
     covariates: [ayacucho, caicara, palua]
     format: excel
+    role: primary
 
   # This file's .xls suffix is retained, but its payload is CSV, not a workbook.
   # It is an exact duplicate of orinoco_stations in the audited worktree.
@@ -21,17 +31,21 @@ sources:
     format: csv
     date_format: "%Y/%m/%d"
     duplicate_of: orinoco_stations
+    role: duplicate # Not loaded by the pipeline.
 
-  # NIVELES stores years in columns and month/day in rows. The future loader
-  # should reshape only these value columns in memory, never rewrite the workbook.
+  # NIVELES stores years in columns and month/day in rows. The loader reshapes
+  # only these value columns in memory, never rewrites the workbook.
+  # Extends Ciudad Bolivar to 2025-12-31 and serves as conflict reference.
   - name: ciudad_bolivar_historical
     path: "data/raw/Niveles Del Orinoco Est. Ciudad Bolivar 1930-2025.xlsx"
     sheet: NIVELES
     date_column: fecha
     target_column: nivel_m
+    unique_id: ciudad_bolivar # Station name used in the long table.
     freq: D
     format: excel
     layout: wide_years
+    role: historical
     date_parts:
       month_column: MES
       day_column: "DIA DEL MES"

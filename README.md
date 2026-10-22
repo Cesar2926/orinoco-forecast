@@ -226,6 +226,10 @@ convierte con `.to_pandas()`.
 
 ## Modelos
 
+Se selecciona **un único modelo final para ambas estaciones**. Los hiperparámetros, su
+justificación y las fuentes de datos externas de cada modelo están detallados en
+[`docs/plan_modelos.md`](docs/plan_modelos.md).
+
 | Familia | Modelo | Librería | Notas |
 |---|---|---|---|
 | Baseline | `Naive` (persistencia) | statsforecast | Predice que el nivel se mantiene igual al último observado. |
@@ -320,9 +324,10 @@ esconde dónde falla cada modelo.
 El criterio se fija antes de ver los resultados. Si se define después, siempre se encuentra
 uno que favorezca al modelo preferido.
 
-1. **Requisito mínimo:** el modelo debe superar a la persistencia (MASE < 1) en ambas
-   estaciones, sobre el bloque de validación. Si ningún modelo lo cumple, ese es el
-   resultado principal del proyecto.
+1. **Requisito mínimo:** el modelo debe superar a la persistencia (MASE < 1) en **cada
+   estación por separado**, sobre el bloque de validación. El MASE no tiene unidades, así
+   que este control impide que Ciudad Bolívar, con niveles mayores, domine la elección. Si
+   ningún modelo lo cumple, ese es el resultado principal del proyecto.
 2. **Métrica principal:** MAE promedio de `h = 1` a `14`, promediado entre Ciudad Bolívar y
    Palúa, sobre las ventanas de validación.
 3. **Desempate**, si dos modelos quedan a pocos centímetros, en este orden:
@@ -384,6 +389,7 @@ Proyecto-IA-Orinoco/
 │   ├── interim/                 # Datos intermedios (no versionados)
 │   ├── processed/               # Tabla final en formato long (no versionada)
 │   └── predictions/<modelo>/    # Salida de cross_validation por modelo
+├── docs/                        # Plan de modelos y apoyo al informe
 ├── notebooks/                   # Exploración y presentación de resultados
 ├── reports/figures/             # Gráficos finales
 ├── scripts/                     # Puntos de entrada por línea de comandos
