@@ -65,3 +65,15 @@ sources:
         OCT: 10
         NOV: 11
         DIC: 12
+
+exogenous:
+  nasa_power:
+    variable: PRECTOTCORR
+    files:
+      ayacucho: "data/external/nasa_power_ayacucho.csv"
+      caicara: "data/external/nasa_power_caicara.csv"
+      ciudad_bolivar: "data/external/nasa_power_ciudad_bolivar.csv"
+      palua: "data/external/nasa_power_palua.csv"
+  noaa_oni:
+    path: "data/external/noaa_oni.ascii.txt"
+    publication_lag_months: 3

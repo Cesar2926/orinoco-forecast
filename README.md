@@ -553,7 +553,7 @@ código entre notebooks.
 | Estructura de carpetas, configuración y entorno con uv | Disponible |
 | Auditoría de datos crudos (`data/raw/README.md`) | Disponible |
 | Carga y validación de datos (`data/loading.py`) | Pendiente |
-| Descarga de NASA POWER / IMERG y ONI (`data/exogenous.py`) | Pendiente |
+| Alineación de NASA POWER y ONI (`data/exogenous.py`) | Disponible |
 | Formato long y variables predictoras (`features/`) | Pendiente |
 | Métricas MAE, RMSE, MASE, NSE, KGE | Pendiente |
 | Baselines y AutoARIMA (statsforecast) | Pendiente |
@@ -568,6 +568,22 @@ código entre notebooks.
 El orden de trabajo previsto es el de la tabla: primero datos, métricas y baselines, luego
 los modelos de menor a mayor costo computacional, y al final las variables exógenas para
 medir cuánto aportan.
+
+### Construcción del dataset con variables externas
+
+Los archivos externos ya descargados en `data/external/` se combinan con
+`data/raw/Nivel Orinoco Formateado.csv` mediante:
+
+```bash
+uv run python scripts/build_exogenous_dataset.py
+```
+
+El resultado se escribe en `data/processed/orinoco_exogenous.parquet`. NASA POWER se
+alinea por fecha como `rain_<estacion>` y el ONI se convierte de sus promedios móviles
+trimestrales a una serie diaria mediante *forward fill*. Antes de esa expansión se aplica
+el retraso de publicación configurado en `configs/data.yaml` (tres meses), para evitar
+fuga de información. Los nulos de lluvia anteriores a 1981 se conservan y se reportan
+como `DataQualityWarning`; no se imputan automáticamente.
 
 ---
 
