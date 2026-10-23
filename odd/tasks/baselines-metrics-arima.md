@@ -12,7 +12,7 @@ Objective: deliver phases 4-6 of `docs/plan_entrenamiento.md` (Naive/SeasonalNai
 
 ## Tasks
 
-- T1 — Forecasting protocol plus Naive and SeasonalNaive baselines with tests. Route: inline. Commit: pending.
+- T1 — Forecasting protocol plus Naive and SeasonalNaive baselines with tests. Route: inline. Commit: `251faac`.
 - T2 — MAE, RMSE, sMAPE, MAPE and MASE metrics with tests. Route: inline. Commit: pending.
 - T3 — Model registry plus ARIMA adapter (fixed order and optional AutoARIMA) with tests. Route: inline. Commit: pending.
 - T4 — Full suite, lint, and real-data ARIMA smoke check at a validation cutoff. Route: inline.
@@ -22,3 +22,5 @@ Objective: deliver phases 4-6 of `docs/plan_entrenamiento.md` (Naive/SeasonalNai
 - L1 — User request (verbatim): "avanza hasta arima".
 - L2 — Scope decision: phases 4, 5 and 6 only. Phase 9 (`evaluation/backtest.py` and persistence under `data/predictions/`) is excluded; predictions already carry `model`, `unique_id`, `cutoff`, `ds` and `horizon_step` so phase 9 only adds `y_true` and writes the files.
 - L3 — Environment probe: `statsmodels.tsa.arima.model.ARIMA` accepts NaN endog (Kalman filter), `pmdarima 2.1.1` imports, and an 18k-point fixed-order fit takes about 3.5 s. ARIMA can therefore consume `palua` with its known leap-day nulls without imputation.
+- L4 — T1 evidence: baseline tests cover last observed value, trailing nulls, cutoff trimming (tampering after the cutoff leaves predictions unchanged), 365-day seasonal lookup, missing seasonal values, multi-station stacking, unfitted use, invalid horizon, duplicate dates and empty history. Full suite: 54 passed, 1 skipped (metrics placeholder at that point); lint clean. Commit `251faac`.
+- L5 — T2 evidence: metric tests pin MAE, RMSE, sMAPE (0/0 term), MAPE (0.375 case and near-zero rejection), MASE against a 365-day scale, zero-scale rejection, null/mismatched/non-finite inputs and duplicate dates. `tests/test_metrics.py`: 11 passed.
