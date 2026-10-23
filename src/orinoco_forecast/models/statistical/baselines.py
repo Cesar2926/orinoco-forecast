@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import warnings
 from datetime import date
 from typing import Self
 
 import polars as pl
 
+from orinoco_forecast.data.loading import DataQualityWarning
 from orinoco_forecast.models.base import (
     PREDICTION_COLUMNS,
     forecast_index,
@@ -79,16 +81,57 @@ class SeasonalNaiveForecaster:
             cutoff=self._cutoff,
             horizon=horizon,
         )
-        lookup = self._history.select(
-            "unique_id",
-            (pl.col("ds") + pl.duration(days=self.seasonality)).alias("ds"),
-            pl.col("y").alias("y_pred"),
+        seasonal_dates = (
+            index.select(
+                "unique_id",
+                (pl.col("ds") - pl.duration(days=self.seasonality)).alias(
+                    "seasonal_ds"
+                ),
+            )
+            .unique()
+            .sort("unique_id", "seasonal_ds")
         )
-        predictions = index.join(lookup, on=["unique_id", "ds"], how="left")
+        available = (
+            self._history.filter(pl.col("y").is_not_null())
+            .select("unique_id", "ds", "y")
+            .sort("unique_id", "ds")
+        )
+        lookup = seasonal_dates.join_asof(
+            available,
+            left_on="seasonal_ds",
+            right_on="ds",
+            by="unique_id",
+            strategy="backward",
+            check_sortedness=False,
+        )
+        shifted = lookup.filter(pl.col("ds") != pl.col("seasonal_ds"))
+        if shifted.height:
+            warnings.warn(
+                f"SeasonalNaive: {shifted.height} valores de hace "
+                f"{self.seasonality} días no están disponibles; se usó el "
+                "último nivel anterior.",
+                DataQualityWarning,
+                stacklevel=2,
+            )
+        predictions = (
+            index.with_columns(
+                (pl.col("ds") - pl.duration(days=self.seasonality)).alias("seasonal_ds")
+            )
+            .join(
+                lookup.select(
+                    "unique_id",
+                    "seasonal_ds",
+                    pl.col("y").alias("y_pred"),
+                ),
+                on=["unique_id", "seasonal_ds"],
+                how="left",
+            )
+            .drop("seasonal_ds")
+        )
         missing = predictions.filter(pl.col("y_pred").is_null())
         if missing.height:
             raise ValueError(
-                f"SeasonalNaive no encuentra el valor de hace {self.seasonality} "
-                f"días para {missing.height} predicciones."
+                f"SeasonalNaive no encuentra ningún nivel anterior para "
+                f"{missing.height} predicciones."
             )
         return predictions.select(PREDICTION_COLUMNS)

@@ -6,6 +6,7 @@ import polars as pl
 import pytest
 from polars.testing import assert_frame_equal
 
+from orinoco_forecast.data.loading import DataQualityWarning
 from orinoco_forecast.models.base import PREDICTION_COLUMNS
 from orinoco_forecast.models.statistical.baselines import (
     NaiveForecaster,
@@ -92,7 +93,28 @@ def test_seasonal_naive_repeats_the_value_365_days_earlier() -> None:
     assert predictions["model"].unique().to_list() == ["seasonal_naive"]
 
 
-def test_seasonal_naive_rejects_missing_seasonal_values() -> None:
+def test_seasonal_naive_falls_back_to_the_last_available_level() -> None:
+    target = date(2021, 6, 1)
+    cutoff = target - timedelta(days=7)
+    seasonal = target - timedelta(days=365)
+    history = _series().with_columns(
+        pl.when(pl.col("ds") == seasonal).then(None).otherwise(pl.col("y")).alias("y")
+    )
+
+    with pytest.warns(DataQualityWarning, match="no están disponibles"):
+        predictions = (
+            SeasonalNaiveForecaster(seasonality=365)
+            .fit(history, cutoff=cutoff)
+            .predict(14)
+        )
+
+    expected = history.filter(pl.col("ds") == seasonal - timedelta(days=1))["y"].item()
+    row = predictions.filter(pl.col("ds") == target).row(0, named=True)
+    assert row["y_pred"] == expected
+    assert predictions.height == 14
+
+
+def test_seasonal_naive_rejects_when_no_prior_level_exists() -> None:
     history = _series(start=date(2021, 1, 1), days=400)
     with pytest.raises(ValueError, match="no encuentra"):
         SeasonalNaiveForecaster(seasonality=365).fit(
