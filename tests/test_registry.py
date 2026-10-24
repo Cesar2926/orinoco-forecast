@@ -34,6 +34,7 @@ def test_registry_reads_arima_config() -> None:
         "palua",
     )
     assert model.use_upstream is True
+    assert model.use_own_lags is True
     assert model.use_rain is True
     assert model.use_oni is True
     assert model.use_calendar is True

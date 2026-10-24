@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import math
 import re
+import warnings
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import date, timedelta
@@ -18,7 +19,10 @@ from typing import Any
 import numpy as np
 import polars as pl
 
+from orinoco_forecast.data.loading import DataQualityWarning
+
 RIVER_ORDER = ("ayacucho", "caicara", "ciudad_bolivar", "palua")
+MAX_EXOG_FALLBACK_DAYS = 7
 FEATURE_PATTERN = re.compile(r"^(?P<source>.+)_lag_(?P<lag>\d+)$")
 CALENDAR_PATTERN = re.compile(r"^(?P<base>sin|cos)_doy(?:_(?P<harmonic>\d+))?$")
 
@@ -185,14 +189,17 @@ def select_exog_columns(
     river_order: Sequence[str] = RIVER_ORDER,
     min_exog_lag: int = 14,
     use_upstream: bool = True,
+    use_own_lags: bool = True,
     use_rain: bool = True,
     use_oni: bool = True,
     use_calendar: bool = True,
 ) -> tuple[str, ...]:
     """Select the leakage-safe exog columns a station may consume.
 
-    Upstream levels, own rain and ONI keep only lags ``>= min_exog_lag``.
-    Calendar terms are deterministic and therefore need no lag.
+    Upstream levels, own safe lags, own rain and ONI keep only lags
+    ``>= min_exog_lag``. Calendar terms are deterministic and need no lag.
+    Own lags below the cutoff horizon stay out of ARIMAX: the AR terms carry
+    short-term inertia and those lags would not be known for every step.
     """
     if min_exog_lag < 0:
         raise ValueError("min_exog_lag no puede ser negativo.")
@@ -201,6 +208,8 @@ def select_exog_columns(
     if use_upstream:
         for source in upstream_of(station, river_order):
             selected.extend(_matching_lag_columns(available, source, min_exog_lag))
+    if use_own_lags:
+        selected.extend(_matching_lag_columns(available, station, min_exog_lag))
     if use_rain:
         selected.extend(
             _matching_lag_columns(available, f"rain_{station}", min_exog_lag)
@@ -380,6 +389,44 @@ def raw_predictors(history: pl.DataFrame) -> pl.DataFrame:
     return wide.join(values, on="ds", how="left").sort("ds")
 
 
+def _lookup_raw_value(
+    by_date: dict[date, dict[str, Any]],
+    source: str,
+    source_date: date,
+    *,
+    station: str,
+    column: str,
+) -> float:
+    """Read a raw source at ``source_date`` or the last previous finite value.
+
+    A missing source date is a data-quality event, not a reason to leak future
+    data or to impute the whole table. The fallback is local to the forecast
+    exog and always reported.
+    """
+    for offset in range(MAX_EXOG_FALLBACK_DAYS + 1):
+        candidate = source_date - timedelta(days=offset)
+        row = by_date.get(candidate)
+        if row is None:
+            continue
+        value = row.get(source)
+        if value is None or not math.isfinite(float(value)):
+            continue
+        if offset:
+            warnings.warn(
+                f"{station}: {source!r} no tiene valor en {source_date}; se usa "
+                f"el último valor observado en {candidate} para construir la "
+                f"exógena {column!r}.",
+                DataQualityWarning,
+                stacklevel=3,
+            )
+        return float(value)
+    raise ValueError(
+        f"{station}: falta un valor finito de {source!r} en {source_date} "
+        f"(y en los {MAX_EXOG_FALLBACK_DAYS} días anteriores) para construir "
+        f"la exógena {column!r}."
+    )
+
+
 def future_exog_matrix(
     raw: pl.DataFrame,
     columns: Sequence[str],
@@ -421,18 +468,14 @@ def future_exog_matrix(
                     f"que el paso {step}; no se puede conocer en el corte."
                 )
             source_date = target_date - timedelta(days=lag)
-            source_row = by_date.get(source_date)
-            if source_row is None:
-                raise ValueError(
-                    f"{station}: falta la fecha {source_date} para construir "
-                    f"la exógena {column!r}."
+            values.append(
+                _lookup_raw_value(
+                    by_date,
+                    source,
+                    source_date,
+                    station=station,
+                    column=column,
                 )
-            value = source_row.get(source)
-            if value is None or not math.isfinite(float(value)):
-                raise ValueError(
-                    f"{station}: falta un valor finito de {source!r} en "
-                    f"{source_date} para construir la exógena {column!r}."
-                )
-            values.append(float(value))
+            )
         rows.append(values)
     return np.asarray(rows, dtype=float)

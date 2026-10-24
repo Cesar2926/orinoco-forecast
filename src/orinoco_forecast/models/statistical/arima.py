@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Mapping, Sequence
 from datetime import date
 from typing import Any, Self
@@ -10,6 +11,7 @@ import numpy as np
 import polars as pl
 from statsmodels.tsa.arima.model import ARIMA
 
+from orinoco_forecast.data.loading import DataQualityWarning
 from orinoco_forecast.features.lags import (
     RIVER_ORDER,
     future_exog_matrix,
@@ -61,9 +63,10 @@ class ArimaForecaster:
 
     Con ``exog=True`` el modelo consume las features rezagadas construidas por
     :mod:`orinoco_forecast.features.lags`: niveles de estaciones aguas arriba,
-    lluvia propia, ONI y calendario. Las exógenas futuras se obtienen solo de
-    valores observados en el corte, y cualquier columna con un rezago menor que
-    el paso pronosticado se rechaza para evitar fuga de información.
+    rezagos propios seguros, lluvia propia, ONI y calendario. Las exógenas
+    futuras se obtienen solo de valores observados en el corte, y cualquier
+    columna con un rezago menor que el paso pronosticado se rechaza para evitar
+    fuga de información.
     """
 
     name = "arima"
@@ -82,6 +85,7 @@ class ArimaForecaster:
         river_order: Sequence[str] = RIVER_ORDER,
         min_exog_lag: int = 14,
         use_upstream: bool = True,
+        use_own_lags: bool = True,
         use_rain: bool = True,
         use_oni: bool = True,
         use_calendar: bool = True,
@@ -104,6 +108,7 @@ class ArimaForecaster:
         self.min_exog_lag = minimum
         self.river_order = _validate_river_order(river_order)
         self.use_upstream = bool(use_upstream)
+        self.use_own_lags = bool(use_own_lags)
         self.use_rain = bool(use_rain)
         self.use_oni = bool(use_oni)
         self.use_calendar = bool(use_calendar)
@@ -204,6 +209,7 @@ class ArimaForecaster:
                 river_order=self.river_order,
                 min_exog_lag=self.min_exog_lag,
                 use_upstream=self.use_upstream,
+                use_own_lags=self.use_own_lags,
                 use_rain=self.use_rain,
                 use_oni=self.use_oni,
                 use_calendar=self.use_calendar,
@@ -233,7 +239,23 @@ class ArimaForecaster:
             raise ValueError(
                 f"{unique_id}: columnas exógenas no numéricas: {non_numeric}."
             )
-        exog = frame.to_numpy().astype(float)
+        filled = frame.with_columns(
+            *(pl.col(column).forward_fill() for column in columns)
+        )
+        before = frame.select(pl.all().null_count()).row(0)
+        after = filled.select(pl.all().null_count()).row(0)
+        n_filled = sum(
+            int(left) - int(right) for left, right in zip(before, after, strict=True)
+        )
+        if n_filled:
+            warnings.warn(
+                f"{unique_id}: se rellenaron {n_filled} valores nulos de exog "
+                "con el último valor observado dentro del entrenamiento, sin "
+                "usar datos futuros.",
+                DataQualityWarning,
+                stacklevel=2,
+            )
+        exog = filled.to_numpy().astype(float)
         if exog.ndim != 2 or exog.shape[1] != len(columns):
             raise RuntimeError(
                 f"{unique_id}: la matriz exógena tiene forma {exog.shape}; "

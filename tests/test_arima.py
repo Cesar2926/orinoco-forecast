@@ -7,6 +7,7 @@ import polars as pl
 import pytest
 from polars.testing import assert_frame_equal
 
+from orinoco_forecast.data.loading import DataQualityWarning
 from orinoco_forecast.features.lags import RiverFeatureConfig, add_river_features
 from orinoco_forecast.models.base import PREDICTION_COLUMNS
 from orinoco_forecast.models.statistical.arima import ArimaForecaster
@@ -215,10 +216,12 @@ def test_arimax_uses_upstream_features_and_forecasts() -> None:
     selected = model.selected_exog_columns
     assert "ayacucho_lag_14" in selected["ciudad_bolivar"]
     assert "caicara_lag_21" in selected["ciudad_bolivar"]
-    assert "ciudad_bolivar_lag_14" not in selected["ciudad_bolivar"]
+    assert "ciudad_bolivar_lag_14" in selected["ciudad_bolivar"]
+    assert "ciudad_bolivar_lag_1" not in selected["ciudad_bolivar"]
     assert "palua_lag_14" not in selected["ciudad_bolivar"]
     assert "ciudad_bolivar_lag_14" in selected["palua"]
-    assert "palua_lag_14" not in selected["palua"]
+    assert "palua_lag_14" in selected["palua"]
+    assert "palua_lag_1" not in selected["palua"]
     assert "rain_palua_lag_14" in selected["palua"]
     assert "oni_lag_30" in selected["palua"]
     assert "oni_lag_0" not in selected["palua"]
@@ -234,6 +237,8 @@ def test_arimax_min_exog_lag_filters_columns() -> None:
     selected = model.selected_exog_columns["ciudad_bolivar"]
     assert "ayacucho_lag_14" not in selected
     assert "ayacucho_lag_21" in selected
+    assert "ciudad_bolivar_lag_14" not in selected
+    assert "ciudad_bolivar_lag_21" in selected
     assert "oni_lag_30" in selected
     assert "oni_lag_0" not in selected
 
@@ -327,11 +332,12 @@ def test_arimax_tolerates_null_target_with_exog() -> None:
         .otherwise(pl.col("y"))
         .alias("y")
     )
-    predictions = (
-        ArimaForecaster(order=(1, 0, 1), exog=True)
-        .fit(history, cutoff=date(2020, 3, 1))
-        .predict(14)
-    )
+    with pytest.warns(DataQualityWarning):
+        predictions = (
+            ArimaForecaster(order=(1, 0, 1), exog=True)
+            .fit(history, cutoff=date(2020, 3, 1))
+            .predict(14)
+        )
 
     assert predictions["y_pred"].is_finite().all()
 

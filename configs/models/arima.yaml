@@ -7,6 +7,7 @@ exog: true
 # Must be >= the 14-day horizon so every future exog value is known at cutoff.
 min_exog_lag: 14
 use_upstream: true
+use_own_lags: true
 use_rain: true
 use_oni: true
 use_calendar: true

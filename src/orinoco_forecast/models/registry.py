@@ -44,6 +44,7 @@ def build_forecaster(name: str, *, seasonality: int = 365) -> Forecaster:
             min_exog_lag=int(config.get("min_exog_lag", features.min_exog_lag)),
             river_order=features.river_order,
             use_upstream=bool(config.get("use_upstream", True)),
+            use_own_lags=bool(config.get("use_own_lags", True)),
             use_rain=bool(config.get("use_rain", True)),
             use_oni=bool(config.get("use_oni", True)),
             use_calendar=bool(config.get("use_calendar", True)),

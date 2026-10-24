@@ -5,6 +5,7 @@ from datetime import date, timedelta
 import polars as pl
 import pytest
 
+from orinoco_forecast.data.loading import DataQualityWarning
 from orinoco_forecast.features.lags import (
     RIVER_ORDER,
     RiverFeatureConfig,
@@ -125,7 +126,8 @@ def test_select_exog_columns_uses_only_upstream_and_safe_lags() -> None:
     city = select_exog_columns(columns, station="ciudad_bolivar")
     assert "ayacucho_lag_14" in city
     assert "caicara_lag_14" in city
-    assert "ciudad_bolivar_lag_14" not in city
+    assert "ciudad_bolivar_lag_14" in city
+    assert "ciudad_bolivar_lag_1" not in city
     assert "palua_lag_14" not in city
     assert "rain_ciudad_bolivar_lag_14" in city
     assert "oni_lag_0" not in city
@@ -134,13 +136,26 @@ def test_select_exog_columns_uses_only_upstream_and_safe_lags() -> None:
 
     palua = select_exog_columns(columns, station="palua")
     assert "ciudad_bolivar_lag_14" in palua
-    assert "palua_lag_14" not in palua
+    assert "palua_lag_14" in palua
+    assert "palua_lag_1" not in palua
     assert "rain_palua_lag_14" in palua
 
     safe = select_exog_columns(columns, station="ciudad_bolivar", min_exog_lag=21)
     assert "ayacucho_lag_14" not in safe
     assert "ayacucho_lag_21" in safe
     assert "oni_lag_30" in safe
+
+
+def test_select_exog_columns_can_disable_own_lags() -> None:
+    featured = add_river_features(_levels(days=60))
+    selected = select_exog_columns(
+        featured.columns,
+        station="ciudad_bolivar",
+        use_own_lags=False,
+    )
+
+    assert "ciudad_bolivar_lag_14" not in selected
+    assert "ayacucho_lag_14" in selected
 
 
 def test_select_exog_columns_can_disable_groups() -> None:
@@ -323,6 +338,29 @@ def test_future_exog_matrix_uses_observed_values_only() -> None:
         [27.0, 270.0, 1100.0],
         [28.0, 280.0, 1200.0],
     ]
+
+
+def test_future_exog_matrix_falls_back_to_last_observed_value() -> None:
+    days = 60
+    values: list[float | None] = [float(step) for step in range(days)]
+    values[26] = None
+    raw = pl.DataFrame(
+        {
+            "ds": [START + timedelta(days=step) for step in range(days)],
+            "ayacucho": values,
+        },
+        schema_overrides={"ds": pl.Date},
+    )
+    with pytest.warns(DataQualityWarning, match="último valor"):
+        matrix = future_exog_matrix(
+            raw,
+            ["ayacucho_lag_14"],
+            station="ciudad_bolivar",
+            cutoff=START + timedelta(days=39),
+            horizon=1,
+        )
+
+    assert matrix.tolist() == [[25.0]]
 
 
 def test_future_exog_matrix_rejects_unsafe_lag() -> None:
