@@ -25,6 +25,18 @@ def test_registry_reads_arima_config() -> None:
     assert model.order == (2, 1, 2)
     assert model.seasonal_order == (0, 0, 0, 0)
     assert model.auto_order is False
+    assert model.exog is True
+    assert model.min_exog_lag == 14
+    assert model.river_order == (
+        "ayacucho",
+        "caicara",
+        "ciudad_bolivar",
+        "palua",
+    )
+    assert model.use_upstream is True
+    assert model.use_rain is True
+    assert model.use_oni is True
+    assert model.use_calendar is True
 
 
 def test_registry_rejects_unknown_model() -> None:
