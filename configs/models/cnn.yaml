@@ -1,6 +1,38 @@
-# Starter 1D convolution settings only; implementation remains TODO.
-channels: [32, 64]
-kernel_size: 3
-dropout: 0.1
-epochs: 50
+# TCN via neuralforecast 3.3.0 (models/neural/cnn.py). The protocol (horizon,
+# step_size, n_windows, refit) lives only in configs/backtest.yaml.
+
+# Architecture. Receptive field = 1 + (kernel_size - 1) * sum(dilations) = 32 days;
+# the runner rejects input_size below it (part of the net would see no data).
+input_size: 56 # Days of history per window (~1 month lead of the floodplain x2).
+kernel_size: 2
+dilations: [1, 2, 4, 8, 16]
+encoder_hidden_size: 64 # Filters per causal convolution layer.
+decoder_hidden_size: 64
+decoder_layers: 2
+
+# Optimisation. MAE loss matches the selection metric; the robust scaler (median,
+# IQR) is fitted per window on its input part, so floods do not distort it.
+loss: MAE
 learning_rate: 0.001
+max_steps: 1000 # Overridable with run_model.py --max-steps for smoke runs.
+batch_size: 32 # Series per batch.
+windows_batch_size: 128 # Training windows sampled per batch.
+scaler_type: robust
+
+# Early stopping on the last val_size days before the first cutoff; those days
+# are not used to fit weights. Patience counts validation checks.
+val_size: 365
+val_check_steps: 50
+early_stop_patience_steps: 5
+
+# One model per seed on the same windows; columns TCN_s<seed>, reported as
+# mean +- std across seeds (predictions are not averaged).
+seeds: [1, 2, 3]
+
+# PyTorch Lightning Trainer kwargs. The accelerator is chosen in code (gpu if
+# CUDA is available, else cpu). deterministic "warn" keeps CUDA runs working.
+trainer:
+  enable_progress_bar: false
+  enable_model_summary: false
+  logger: false
+  deterministic: warn

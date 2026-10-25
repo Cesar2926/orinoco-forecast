@@ -20,8 +20,15 @@ def _xgboost() -> ForecastRunner:
     return XGBoostRunner()
 
 
+def _tcn() -> ForecastRunner:
+    from orinoco_forecast.models.neural.cnn import TCNRunner
+
+    return TCNRunner()
+
+
 RUNNERS: dict[str, Callable[[], ForecastRunner]] = {
     "baselines": _baselines,
+    "tcn": _tcn,
     "xgboost": _xgboost,
 }
 
