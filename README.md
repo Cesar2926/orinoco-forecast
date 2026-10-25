@@ -229,6 +229,7 @@ convierte con `.to_pandas()`.
 Se selecciona **un único modelo final para ambas estaciones**. Los hiperparámetros, su
 justificación y las fuentes de datos externas de cada modelo están detallados en
 [`docs/plan_modelos.md`](docs/plan_modelos.md).
+Implementación, ajuste y resultados de XGBoost y TCN: [`docs/modelos_arboles_cnn.md`](docs/modelos_arboles_cnn.md).
 
 | Familia | Modelo | Librería | Notas |
 |---|---|---|---|
@@ -493,16 +494,22 @@ instalarlo con `choco install make` o `scoop install make`.
 
 Tablero de Streamlit para inspeccionar los datos y el comportamiento de los modelos. Es de
 solo lectura: no entrena modelos ni toca el bloque de test final; lee los niveles de
-`data/raw/` y las predicciones de validación de `data/predictions/<modelo>/`. Esas
-predicciones no se versionan, así que primero hay que generarlas (los baselines antes que
-el resto, porque `rel_mae` se calcula contra Naive):
+`data/raw/` y las predicciones de validación de `data/predictions/<modelo>/stage_<A|B>/`.
+Esas predicciones no se versionan, así que primero hay que generarlas, por etapa (los
+baselines antes que el resto, porque `rel_mae` se calcula contra el Naive de la misma
+etapa y `run_model.py` se detiene si faltan):
 
 ```bash
-uv run python scripts/run_model.py baselines
-uv run python scripts/run_model.py xgboost
-uv run python scripts/run_model.py tcn
+uv run python scripts/run_model.py baselines --stage A
+uv run python scripts/run_model.py xgboost --stage A
+uv run python scripts/run_model.py tcn --stage A
+# Etapa B (lluvia y ONI): lo mismo con --stage B
 uv run streamlit run app/dashboard.py   # o: make dashboard
 ```
+
+La barra lateral elige la etapa ("Etapa A: solo río" o "Etapa B: río + lluvia + ONI") y
+esa elección cambia todas las pestañas de modelos. La pestaña de validación incluye además
+una tabla de la etapa A frente a la B por modelo y estación.
 
 | Pestaña | Qué muestra |
 |---|---|
