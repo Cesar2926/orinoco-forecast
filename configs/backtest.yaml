@@ -10,9 +10,13 @@ seasonality: 365 # SeasonalNaive period (MASE is horizon-matched, not seasonal).
 # the windows. Same policy for every model (fairness) and 24x cheaper for neural
 # models than refitting per window.
 refit: false
-# Hyperparameter tuning (evaluation/tuning.py): 12 windows every 30 days that end
-# at the first VALIDATION cutoff, so hyperparameters are chosen without seeing the
-# 24 windows (2021-2022) that compare models, and never the final test.
+# Hyperparameter tuning (evaluation/tuning.py): 12 windows that end at the first
+# VALIDATION cutoff, so hyperparameters are chosen without seeing the 24 windows
+# (2021-2022) that compare models, and never the final test. step_size is 23,
+# not 30: the target has an imputed gap 2020-03-25..2020-04-12 and the leakage
+# guard forbids cutoffs within `horizon` days of imputed rows; 12 x 30 days back
+# from the first validation cutoff always hits it. 12 x 23 spans 2020-05-04 to
+# 2021-01-26 (rising limb, peak and recession) and windows still do not overlap.
 tuning:
   n_windows: 12
-  step_size: 30
+  step_size: 23

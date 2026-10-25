@@ -22,6 +22,7 @@ from orinoco_forecast.evaluation.tuning import (
     suggest_xgboost,
     trials_table,
 )
+from orinoco_forecast.features.dataset import assert_no_imputation_near_cutoffs
 from orinoco_forecast.models.neural.cnn import load_cnn_config
 from orinoco_forecast.models.trees.tree import load_tree_config
 
@@ -50,12 +51,21 @@ def test_tuning_windows_end_at_first_validation_cutoff() -> None:
 
     data, tcfg = tuning_frame(frame, cfg), tuning_config(cfg)
     assert data["ds"].max() == first_val
-    assert (tcfg["n_windows"], tcfg["step_size"]) == (12, 30)
+    assert tcfg["n_windows"] == cfg["tuning"]["n_windows"]
+    assert tcfg["step_size"] == cfg["tuning"]["step_size"]
     assert (tcfg["horizon"], tcfg["refit"]) == (cfg["horizon"], cfg["refit"])
     tune_cuts = cutoffs(data, tcfg)
-    assert len(tune_cuts) == 12
+    assert len(tune_cuts) == cfg["tuning"]["n_windows"]
     # Every tuning target date is on or before the first validation cutoff.
     assert tune_cuts[-1] + timedelta(days=tcfg["horizon"]) == first_val
+
+
+def test_tuning_cutoffs_pass_leakage_guard_on_real_frame(
+    model_frame_a: pl.DataFrame,
+) -> None:
+    cfg = load_backtest_config()
+    data, tcfg = tuning_frame(model_frame_a, cfg), tuning_config(cfg)
+    assert_no_imputation_near_cutoffs(data, cutoffs(data, tcfg), tcfg["horizon"])
 
 
 def test_predict_cv_runs_leakage_guard_on_tuning_cutoffs() -> None:
