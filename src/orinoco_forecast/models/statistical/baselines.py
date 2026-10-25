@@ -1,10 +1,15 @@
-"""Baselines de persistencia (Naive) y persistencia estacional (SeasonalNaive)."""
+"""Baselines de persistencia (Naive) y persistencia estacional (SeasonalNaive).
+
+``NaiveForecaster`` y ``SeasonalNaiveForecaster`` implementan ``Forecaster``
+(un corte a la vez); ``BaselinesRunner`` implementa ``ForecastRunner`` con la
+validación cruzada de StatsForecast.
+"""
 
 from __future__ import annotations
 
 import warnings
 from datetime import date
-from typing import Self
+from typing import Any, Self
 
 import polars as pl
 
@@ -135,3 +140,28 @@ class SeasonalNaiveForecaster:
                 f"{missing.height} predicciones."
             )
         return predictions.select(PREDICTION_COLUMNS)
+
+
+class BaselinesRunner:
+    """Persistencia y "lo mismo que el año pasado"; solo usan ``y``."""
+
+    name = "baselines"
+    model_columns = ["Naive", "SeasonalNaive"]
+
+    def cross_validation(
+        self, frame: pl.DataFrame, cfg: dict[str, Any]
+    ) -> pl.DataFrame:
+        # Imported here so the per-cutoff forecasters do not load StatsForecast.
+        from statsforecast import StatsForecast
+        from statsforecast.models import Naive, SeasonalNaive
+
+        models = [Naive(), SeasonalNaive(season_length=cfg["seasonality"])]
+        # With polars input StatsForecast requires a polars offset ("1d"), not "D".
+        sf = StatsForecast(models=models, freq="1d")
+        return sf.cross_validation(
+            h=cfg["horizon"],
+            df=frame.select("unique_id", "ds", "y"),
+            n_windows=cfg["n_windows"],
+            step_size=cfg["step_size"],
+            refit=cfg["refit"],
+        )

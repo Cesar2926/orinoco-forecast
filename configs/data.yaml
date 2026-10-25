@@ -78,6 +78,13 @@ exogenous:
     path: "data/external/noaa_oni.ascii.txt"
     publication_lag_months: 3
 
+# Model-ready frame built by orinoco_forecast.features.dataset.build_model_frame.
+model_frame:
+  upstream: [ayacucho, caicara] # Historical covariates (past values only).
+  max_gap_days: 31 # Longer null runs stay null (series is not invented).
+  fourier_k: 3 # sin/cos pairs for the annual cycle.
+  fourier_period: 365.25 # Days.
+
 # Leakage-safe features built by scripts/build_exogenous_dataset.py.
 # A feature dated t only reads a source dated t - lag. ARIMAX consumes only
 # lags >= min_exog_lag, so every future exog value is observed at the cutoff.

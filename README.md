@@ -70,7 +70,7 @@ Caicara y, para Palúa, Ciudad Bolívar), variables cíclicas de calendario, pre
 |---|---|---|---|
 | `Niveles Orinoco.xlsx` | Niveles diarios de 4 estaciones: `ayacucho`, `caicara`, `ciudad_bolivar`, `palua`. | 1974-01-01 a 2025-02-24 (18 683 días) | **Fuente principal.** Es la única con las cuatro estaciones alineadas día a día. |
 | `Niveles Del Orinoco Est. Ciudad Bolivar 1930-2025.xlsx` | Histórico de Ciudad Bolívar con años en columnas y días en filas (sin 29 de febrero). | 1930 a 2025 | Extiende Ciudad Bolívar hasta 2025-12-31 y sirve para detectar valores imputados en la fuente principal. |
-| `Nivel Orinoco Formateado.csv` | La fuente principal extendida a mano hasta 2025-12-31 con lecturas del histórico. | 1974-01-01 a 2025-12-31 | No se usa: el pipeline la reproduce con código a partir de las dos fuentes anteriores. |
+| `Nivel Orinoco Formateado.csv` | La fuente principal extendida a mano hasta 2025-12-31 con lecturas del histórico. | 1974-01-01 a 2025-12-31 | La usa `scripts/build_exogenous_dataset.py` en el pipeline de ARIMA/ARIMAX; el marco de modelado de XGBoost/TCN se construye a partir de las dos fuentes xlsx. |
 | `dataset_imputado_simpleml.csv.xls` | CSV (pese a la extensión) idéntico, celda por celda, a `Niveles Orinoco.xlsx`. | 1974 a 2025 | No se usa: es un duplicado. |
 
 La descripción detallada de cada archivo (columnas, nulos, rarezas) está en
@@ -229,6 +229,7 @@ convierte con `.to_pandas()`.
 Se selecciona **un único modelo final para ambas estaciones**. Los hiperparámetros, su
 justificación y las fuentes de datos externas de cada modelo están detallados en
 [`docs/plan_modelos.md`](docs/plan_modelos.md).
+Implementación, ajuste y resultados de XGBoost y TCN: [`docs/modelos_arboles_cnn.md`](docs/modelos_arboles_cnn.md).
 
 | Familia | Modelo | Librería | Notas |
 |---|---|---|---|
@@ -311,7 +312,8 @@ modelos.
 |---|---|---|
 | MAE | Error absoluto medio, en metros. | Más bajo es mejor. |
 | RMSE | Raíz del error cuadrático medio, en metros. | Penaliza más los errores grandes (crecidas mal predichas). |
-| MASE | MAE escalado por el error de la persistencia en entrenamiento. | Menor que 1 significa que el modelo supera a la persistencia. |
+| MASE | MAE de cada día del horizonte `h` escalado por el error de la persistencia a `h` días en entrenamiento. | Menor que 1 significa que el modelo supera a la persistencia. |
+| MAE relativo (`rel_mae`) | MAE del modelo dividido por el MAE de la persistencia (Naive) en las mismas ventanas de validación. | Menor que 1 significa que el modelo supera a la persistencia en ese período; es el requisito mínimo de selección. |
 | NSE | Eficiencia de Nash-Sutcliffe, estándar en hidrología. | 1 es perfecto; 0 equivale a predecir la media; negativo es peor que la media. |
 | KGE | Eficiencia de Kling-Gupta: combina correlación, sesgo y variabilidad. | 1 es perfecto. |
 
@@ -324,10 +326,14 @@ esconde dónde falla cada modelo.
 El criterio se fija antes de ver los resultados. Si se define después, siempre se encuentra
 uno que favorezca al modelo preferido.
 
-1. **Requisito mínimo:** el modelo debe superar a la persistencia (MASE < 1) en **cada
-   estación por separado**, sobre el bloque de validación. El MASE no tiene unidades, así
-   que este control impide que Ciudad Bolívar, con niveles mayores, domine la elección. Si
-   ningún modelo lo cumple, ese es el resultado principal del proyecto.
+1. **Requisito mínimo:** el modelo debe superar a la persistencia en **cada estación por
+   separado**, sobre el bloque de validación: MAE relativo a la persistencia (MAE del
+   modelo / MAE de Naive en las mismas ventanas de validación) < 1. Al ser un cociente sin
+   unidades, este control impide que Ciudad Bolívar, con niveles mayores, domine la
+   elección. No se usa MASE < 1 porque su escala viene del historial de entrenamiento y
+   no del período evaluado: la propia persistencia obtiene MASE = 1,16 en Palúa en
+   2021–2022, así que el umbral dependería de cuán difícil fue la validación respecto
+   al historial. Si ningún modelo lo cumple, ese es el resultado principal del proyecto.
 2. **Métrica principal:** MAE promedio de `h = 1` a `14`, promediado entre Ciudad Bolívar y
    Palúa, sobre las ventanas de validación.
 3. **Desempate**, si dos modelos quedan a pocos centímetros, en este orden:
@@ -356,7 +362,10 @@ proyecto:
    (`futr_exog_list`).
 3. **Preprocesamiento ajustado solo en entrenamiento.** El escalado y la imputación de
    nulos se calculan dentro de cada ventana, usando únicamente sus datos de entrenamiento.
-   Ningún dato se imputa usando valores posteriores al corte.
+   Ningún dato se imputa usando valores posteriores al corte. Los huecos cortos se
+   interpolan una sola vez sobre la serie completa, y `assert_no_imputation_near_cutoffs`
+   verifica que ningún valor imputado quede a `horizon` días o menos de un corte; para
+   las ventanas evaluadas eso equivale a imputar dentro de cada ventana.
 4. **ONI con retraso de publicación.** El índice ONI es un promedio móvil de tres meses que
    se publica después de que termina el período; se desplaza en el tiempo para usar solo
    valores que ya estaban publicados en cada fecha.
@@ -372,6 +381,8 @@ proyecto:
 
 ```text
 Proyecto-IA-Orinoco/
+├── app/
+│   └── dashboard.py             # Tablero Streamlit de solo lectura
 ├── configs/                     # Toda la configuración del proyecto
 │   ├── data.yaml                # Fuentes de datos: rutas, columnas, formato
 │   ├── backtest.yaml            # Protocolo compartido: horizon, ventanas, test_start
@@ -474,9 +485,41 @@ uv sync
 | `uv run pytest` | `make test` | Ejecuta las pruebas. |
 | `uv run ruff check .` | `make lint` | Revisa estilo y errores comunes. |
 | `uv run ruff format .` | `make format` | Formatea el código. |
+| `uv run streamlit run app/dashboard.py` | `make dashboard` | Abre el tablero de datos y modelos. |
 
 En Windows `make` no viene instalado; se pueden usar los comandos `uv` directamente o
 instalarlo con `choco install make` o `scoop install make`.
+
+### Dashboard
+
+Tablero de Streamlit para inspeccionar los datos y el comportamiento de los modelos. Es de
+solo lectura: no entrena modelos ni toca el bloque de test final; lee los niveles de
+`data/raw/` y las predicciones de validación de `data/predictions/<modelo>/stage_<A|B>/`.
+Esas predicciones no se versionan, así que primero hay que generarlas, por etapa (los
+baselines antes que el resto, porque `rel_mae` se calcula contra el Naive de la misma
+etapa y `run_model.py` se detiene si faltan):
+
+```bash
+uv run python scripts/run_model.py baselines --stage A
+uv run python scripts/run_model.py xgboost --stage A
+uv run python scripts/run_model.py tcn --stage A
+# Etapa B (lluvia y ONI): lo mismo con --stage B
+uv run streamlit run app/dashboard.py   # o: make dashboard
+```
+
+La barra lateral elige la etapa ("Etapa A: solo río" o "Etapa B: río + lluvia + ONI") y
+esa elección cambia todas las pestañas de modelos. La pestaña de validación incluye además
+una tabla de la etapa A frente a la B por modelo y estación.
+
+| Pestaña | Qué muestra |
+|---|---|
+| Datos | Nivel diario por estación y rango de fechas, con los días no `observed` coloreados por etiqueta de calidad y un conteo de etiquetas por estación. Si existe `data/processed/orinoco_exogenous.parquet`, también lluvia diaria y ONI. |
+| Validación de modelos | Métricas (h = 1..14) por estación y modelo, con `rel_mae < 1` marcado; media ± desviación entre semillas de las redes; tabla del criterio de selección y MAE por día de horizonte frente a Naive. |
+| Pronóstico por ventana | Para una estación y un corte de validación: 60 días observados antes del corte, los 14 posteriores y el pronóstico de cada modelo. La media de semillas se muestra solo como referencia visual. |
+| Importancia de variables | Las 15 variables con más ganancia en XGBoost, con la explicación de sus nombres. |
+
+Cada gráfico lleva encima una nota sobre qué representa y cómo leerlo. Si falta alguna
+predicción, el tablero muestra el comando exacto para generarla.
 
 ---
 
@@ -552,16 +595,19 @@ código entre notebooks.
 |---|---|
 | Estructura de carpetas, configuración y entorno con uv | Disponible |
 | Auditoría de datos crudos (`data/raw/README.md`) | Disponible |
-| Carga y validación de datos (`data/loading.py`) | Pendiente |
+| Carga y validación de datos (`data/loading.py`) | Disponible |
 | Alineación de NASA POWER y ONI (`data/exogenous.py`) | Disponible |
 | Formato long y variables predictoras (`features/`) | Disponible (rezagos aguas arriba, lluvia, ONI y calendario) |
-| Métricas MAE, RMSE, MASE, NSE, KGE | Pendiente |
-| Baselines y AutoARIMA (statsforecast) | Pendiente |
-| XGBoost (mlforecast) | Pendiente |
-| LSTM, TCN, TFT (neuralforecast) | Pendiente |
+| Extracción a formato largo con columna `quality` | Disponible |
+| Métricas MAE, RMSE, MASE (por horizonte y estacional), NSE, KGE, MAE relativo, sMAPE, MAPE | Disponible |
+| Baselines Naive y SeasonalNaive | Disponible |
+| ARIMA / ARIMAX (statsmodels) | Implementado; comparación en las 24 ventanas pendiente |
+| XGBoost (mlforecast) | Disponible: ajustado y evaluado en etapas A y B |
+| TCN (neuralforecast) | Disponible: ajustado y evaluado en etapas A y B |
+| LSTM, TFT (neuralforecast) | Pendiente |
 | TimesFM 3.0 | Pendiente |
-| Extracción a formato largo con columna `quality` | Pendiente |
-| Comparación en validación y selección del modelo final | Pendiente |
+| Dashboard Streamlit | Disponible |
+| Comparación en validación y selección del modelo final | En curso: XGBoost y TCN evaluados ([detalle](docs/modelos_arboles_cnn.md)) |
 | Evaluación del modelo elegido en el test final y reporte | Pendiente |
 | Ensamble de modelos | Fuera del alcance; experimento opcional |
 

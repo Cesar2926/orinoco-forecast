@@ -3,12 +3,15 @@
 Todos los modelos reciben un histórico en formato largo (``unique_id``, ``ds``,
 ``y`` y covariables opcionales) y un ``cutoff``. El ajuste usa solo fechas
 menores o iguales al corte y el pronóstico cubre ``cutoff + 1 .. cutoff + H``.
+
+``Forecaster`` ajusta y predice un corte a la vez; ``ForecastRunner`` produce la
+validación cruzada completa con el protocolo común de ``configs/backtest.yaml``.
 """
 
 from __future__ import annotations
 
 from datetime import date
-from typing import Protocol, Self
+from typing import Any, Protocol, Self
 
 import polars as pl
 
@@ -118,3 +121,18 @@ def forecast_index(
         )
         .select(FORECAST_INDEX_COLUMNS)
     )
+
+
+class ForecastRunner(Protocol):
+    """Cualquier modelo que produzca validación cruzada con el protocolo común.
+
+    ``cross_validation`` recibe la tabla del modelo y ``configs/backtest.yaml``
+    (``horizon``, ``step_size``, ``n_windows``, ``refit``) y devuelve
+    ``unique_id, ds, cutoff, y`` más una columna por nombre en ``model_columns``
+    (polars o pandas; ``run_cv`` normaliza el resultado).
+    """
+
+    name: str
+    model_columns: list[str]
+
+    def cross_validation(self, frame: pl.DataFrame, cfg: dict[str, Any]) -> Any: ...

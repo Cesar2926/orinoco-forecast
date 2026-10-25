@@ -1,4 +1,4 @@
-.PHONY: setup test lint format clean
+.PHONY: setup test lint format dashboard clean
 
 setup:
 	uv sync
@@ -11,6 +11,9 @@ lint:
 
 format:
 	uv run ruff format .
+
+dashboard:
+	uv run streamlit run app/dashboard.py
 
 clean:
 	uv run python -c "import shutil; from pathlib import Path; [shutil.rmtree(Path(name), ignore_errors=True) for name in ['.pytest_cache', '.ruff_cache', 'build', 'dist']]"
