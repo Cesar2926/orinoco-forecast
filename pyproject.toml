@@ -16,6 +16,7 @@ dependencies = [
     "scikit-learn>=1.9.1",
     "statsforecast>=2.1.1",
     "statsmodels>=0.15.0",
+    "streamlit>=1.66.1",
     "torch>=2.14.1",
     "utilsforecast>=0.2.17",
     "xgboost>=3.4.1",
