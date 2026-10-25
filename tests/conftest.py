@@ -7,6 +7,7 @@ import polars as pl
 import pytest
 
 from orinoco_forecast.data.loading import load_historical, load_primary
+from orinoco_forecast.features.dataset import build_model_frame, load_levels
 
 
 @dataclass(frozen=True)
@@ -40,3 +41,26 @@ def primary(primary_loaded: Loaded) -> pl.DataFrame:
 @pytest.fixture(scope="session")
 def historical(historical_loaded: Loaded) -> pl.DataFrame:
     return historical_loaded.frame
+
+
+@pytest.fixture(scope="session")
+def levels(primary: pl.DataFrame, historical: pl.DataFrame) -> pl.DataFrame:
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        return load_levels(primary=primary, historical=historical)
+
+
+def _model_frame(stage: str, levels: pl.DataFrame) -> pl.DataFrame:
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        return build_model_frame(stage, levels=levels)
+
+
+@pytest.fixture(scope="session")
+def model_frame_a(levels: pl.DataFrame) -> pl.DataFrame:
+    return _model_frame("A", levels)
+
+
+@pytest.fixture(scope="session")
+def model_frame_b(levels: pl.DataFrame) -> pl.DataFrame:
+    return _model_frame("B", levels)
