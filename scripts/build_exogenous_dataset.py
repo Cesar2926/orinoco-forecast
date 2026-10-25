@@ -1,4 +1,4 @@
-"""Enriquece el nivel Orinoco formateado con NASA POWER y NOAA ONI.
+"""Enriquece el nivel Orinoco formateado con NASA POWER, NOAA ONI y features.
 
 Uso: ``uv run python scripts/build_exogenous_dataset.py``.
 El resultado se escribe en ``data/processed/orinoco_exogenous.parquet``.
@@ -8,6 +8,11 @@ import polars as pl
 
 from orinoco_forecast.data.exogenous import add_exogenous, load_exogenous_config
 from orinoco_forecast.data.loading import load_config, repo_root
+from orinoco_forecast.features.lags import add_river_features, load_feature_config
+
+# Variable de control del script: aplica los rezagos aguas arriba, lluvia, ONI
+# y calendario sobre el resultado de add_exogenous antes de escribir la tabla.
+BUILD_RIVER_FEATURES = True
 
 
 def load_formatted_levels() -> pl.DataFrame:
@@ -40,10 +45,13 @@ def load_formatted_levels() -> pl.DataFrame:
 
 
 def build() -> pl.DataFrame:
-    """Construye la tabla larga de niveles y variables externas."""
+    """Construye la tabla larga de niveles, variables externas y features."""
     config = load_config()
     nasa, oni = load_exogenous_config(config)
-    return add_exogenous(load_formatted_levels(), nasa, oni)
+    dataset = add_exogenous(load_formatted_levels(), nasa, oni)
+    if BUILD_RIVER_FEATURES:
+        dataset = add_river_features(dataset, load_feature_config(config))
+    return dataset
 
 
 def main() -> None:
@@ -52,7 +60,11 @@ def main() -> None:
     parquet_output = output_dir / "orinoco_exogenous.parquet"
     csv_output = output_dir / "orinoco_exogenous.csv"
     dataset = build()
-    rain_columns = [column for column in dataset.columns if column.startswith("rain_")]
+    rain_columns = [
+        column
+        for column in dataset.columns
+        if column.startswith("rain_") and "_lag_" not in column
+    ]
     if not rain_columns:
         raise ValueError("El dataset no contiene columnas de lluvia NASA POWER.")
     rain_rows = dataset.select(
@@ -64,12 +76,22 @@ def main() -> None:
         )
     dataset.write_parquet(parquet_output)
     dataset.write_csv(csv_output)
+    base_columns = {"unique_id", "ds", "y", "oni", *rain_columns}
+    feature_columns = [
+        column for column in dataset.columns if column not in base_columns
+    ]
     print(
         f"Escritos {parquet_output} y {csv_output} "
         f"({dataset.height} filas, {dataset.width} columnas)"
     )
     print(f"Columnas de lluvia: {', '.join(rain_columns)}")
     print(f"Filas con al menos un valor de lluvia: {rain_rows}")
+    print(
+        f"BUILD_RIVER_FEATURES={BUILD_RIVER_FEATURES}; "
+        f"{len(feature_columns)} columnas de features"
+    )
+    if feature_columns:
+        print(f"Primeras features: {', '.join(feature_columns[:8])}")
     with pl.Config(
         tbl_hide_dataframe_shape=True,
         tbl_formatting="ASCII_FULL_CONDENSED",

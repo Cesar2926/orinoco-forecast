@@ -1,1 +1,1 @@
-"""Model package placeholder; concrete models are intentionally not created."""
+"""Model package: forecasting protocol, baselines, and configured models."""

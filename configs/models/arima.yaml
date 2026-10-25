@@ -1,4 +1,13 @@
-# Starter ARIMA parameters; implementation remains TODO.
+# Starter ARIMA parameters. With exog=true the adapter fits one ARIMAX per
+# station using the lagged features built by scripts/build_exogenous_dataset.py.
 order: [2, 1, 2]
 seasonal_order: [0, 0, 0, 0]
 auto_order: false
+exog: true
+# Must be >= the 14-day horizon so every future exog value is known at cutoff.
+min_exog_lag: 14
+use_upstream: true
+use_own_lags: true
+use_rain: true
+use_oni: true
+use_calendar: true

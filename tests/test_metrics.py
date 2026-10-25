@@ -1,7 +1,8 @@
-"""Metric values checked against hand-computed cases."""
+"""Pruebas de las métricas de evaluación (casos calculados a mano)."""
 
 import math
 from datetime import date, timedelta
+from math import sqrt
 
 import numpy as np
 import polars as pl
@@ -11,10 +12,14 @@ from orinoco_forecast.evaluation.metrics import (
     evaluate_cv,
     kge,
     mae,
+    mape,
     mase,
+    mase_horizon,
     nse,
     relative_to_baseline,
     rmse,
+    seasonal_scale,
+    smape,
 )
 
 Y = [1.0, 2.0, 3.0, 4.0]
@@ -39,16 +44,16 @@ def test_nse_mean_forecast_is_zero() -> None:
     assert nse(Y, [2.0, 2.0, 2.0, 2.0]) == pytest.approx(1 - 6 / 5)
 
 
-def test_mase_scales_by_in_sample_naive() -> None:
+def test_mase_horizon_scales_by_in_sample_naive() -> None:
     train = [1.0, 3.0, 2.0, 5.0]  # lag-1 abs diffs 2, 1, 3 -> 2; lag-2: 1, 2 -> 1.5
     pred = [2.0, 2.0, 2.0, 2.0]  # MAE 1
-    assert mase(Y, pred, train) == pytest.approx(0.5)
-    assert mase(Y, pred, train, season=2) == pytest.approx(1 / 1.5)
+    assert mase_horizon(Y, pred, train) == pytest.approx(0.5)
+    assert mase_horizon(Y, pred, train, season=2) == pytest.approx(1 / 1.5)
 
 
-def test_mase_requires_history_longer_than_season() -> None:
+def test_mase_horizon_requires_history_longer_than_season() -> None:
     with pytest.raises(ValueError):
-        mase(Y, Y, [1.0, 2.0], season=2)
+        mase_horizon(Y, Y, [1.0, 2.0], season=2)
 
 
 def test_kge_bias_and_variability() -> None:
@@ -156,3 +161,79 @@ def test_relative_to_baseline_rejects_different_windows() -> None:
     model = _metrics("M", {("a", "all"): 1.0}, n=4)
     with pytest.raises(ValueError, match="ventanas"):
         relative_to_baseline(model, _metrics("Naive", {("a", "all"): 1.0}, n=6))
+
+
+def _history(start: date = date(2020, 1, 1), days: int = 800) -> pl.DataFrame:
+    return pl.DataFrame(
+        {
+            "ds": [start + timedelta(days=index) for index in range(days)],
+            "y": [float(index) for index in range(days)],
+        },
+        schema={"ds": pl.Date, "y": pl.Float64},
+    )
+
+
+def test_mae() -> None:
+    assert mae([1.0, 2.0, 3.0], [1.0, 3.0, 5.0]) == 1.0
+
+
+def test_rmse() -> None:
+    assert rmse([1.0, 2.0, 3.0], [1.0, 3.0, 5.0]) == pytest.approx(sqrt(5 / 3))
+
+
+def test_smape_uses_the_two_in_the_numerator() -> None:
+    # |1-1| y |2-0|: el segundo término satura en 2.
+    assert smape([1.0, 2.0], [1.0, 0.0]) == pytest.approx(1.0)
+    # Un cero contra un cero no aporta error.
+    assert smape([0.0, 1.0], [0.0, 1.0]) == 0.0
+
+
+def test_mape() -> None:
+    assert mape([2.0, 4.0], [1.0, 3.0]) == pytest.approx(0.375)
+
+
+def test_mape_rejects_values_near_zero() -> None:
+    with pytest.raises(ValueError, match="cerca de cero"):
+        mape([1e-12, 2.0], [1.0, 2.0])
+
+
+def test_seasonal_scale_uses_training_history() -> None:
+    history = _history()
+    assert seasonal_scale(history, seasonality=365) == pytest.approx(365.0)
+
+
+def test_mase_divides_by_the_seasonal_scale() -> None:
+    history = _history()
+    assert mase([800.0], [799.0], history, seasonality=365) == pytest.approx(1 / 365)
+
+
+def test_mase_rejects_a_zero_scale() -> None:
+    history = pl.DataFrame(
+        {
+            "ds": [date(2020, 1, 1) + timedelta(days=index) for index in range(10)],
+            "y": [5.0] * 10,
+        },
+        schema={"ds": pl.Date, "y": pl.Float64},
+    )
+    with pytest.raises(ValueError, match="escala estacional"):
+        seasonal_scale(history, seasonality=2)
+
+
+def test_metrics_reject_null_and_mismatched_inputs() -> None:
+    with pytest.raises(ValueError, match="nulos"):
+        mae([1.0, None], [1.0, 2.0])
+    with pytest.raises(ValueError, match="longitud"):
+        mae([1.0], [1.0, 2.0])
+    with pytest.raises(ValueError, match="vacía"):
+        mae([], [])
+
+
+def test_metrics_reject_non_finite_values() -> None:
+    with pytest.raises(ValueError, match="finitos"):
+        mae([1.0, float("nan")], [1.0, 2.0])
+
+
+def test_seasonal_scale_rejects_duplicate_dates() -> None:
+    history = pl.concat([_history(days=10), _history(days=10).tail(1)])
+    with pytest.raises(ValueError, match="duplicad"):
+        seasonal_scale(history, seasonality=2)

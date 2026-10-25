@@ -46,8 +46,8 @@ sino una trayectoria de 14 valores.
 | `palua` | Palúa | Estación aguas abajo; permite evaluar si los modelos generalizan a un punto del río con dinámica distinta. |
 
 **Variables predictoras:** niveles rezagados de las estaciones aguas arriba (Ayacucho,
-Caicara), variables cíclicas de calendario, precipitación (NASA) y el estado del fenómeno
-El Niño / La Niña (índice ONI de NOAA).
+Caicara y, para Palúa, Ciudad Bolívar), variables cíclicas de calendario, precipitación
+(NASA) y el estado del fenómeno El Niño / La Niña (índice ONI de NOAA).
 
 **Objetivos del proyecto:**
 
@@ -70,7 +70,7 @@ El Niño / La Niña (índice ONI de NOAA).
 |---|---|---|---|
 | `Niveles Orinoco.xlsx` | Niveles diarios de 4 estaciones: `ayacucho`, `caicara`, `ciudad_bolivar`, `palua`. | 1974-01-01 a 2025-02-24 (18 683 días) | **Fuente principal.** Es la única con las cuatro estaciones alineadas día a día. |
 | `Niveles Del Orinoco Est. Ciudad Bolivar 1930-2025.xlsx` | Histórico de Ciudad Bolívar con años en columnas y días en filas (sin 29 de febrero). | 1930 a 2025 | Extiende Ciudad Bolívar hasta 2025-12-31 y sirve para detectar valores imputados en la fuente principal. |
-| `Nivel Orinoco Formateado.csv` | La fuente principal extendida a mano hasta 2025-12-31 con lecturas del histórico. | 1974-01-01 a 2025-12-31 | No se usa: el pipeline la reproduce con código a partir de las dos fuentes anteriores. |
+| `Nivel Orinoco Formateado.csv` | La fuente principal extendida a mano hasta 2025-12-31 con lecturas del histórico. | 1974-01-01 a 2025-12-31 | La usa `scripts/build_exogenous_dataset.py` en el pipeline de ARIMA/ARIMAX; el marco de modelado de XGBoost/TCN se construye a partir de las dos fuentes xlsx. |
 | `dataset_imputado_simpleml.csv.xls` | CSV (pese a la extensión) idéntico, celda por celda, a `Niveles Orinoco.xlsx`. | 1974 a 2025 | No se usa: es un duplicado. |
 
 La descripción detallada de cada archivo (columnas, nulos, rarezas) está en
@@ -597,7 +597,7 @@ código entre notebooks.
 | Auditoría de datos crudos (`data/raw/README.md`) | Disponible |
 | Carga y validación de datos (`data/loading.py`) | Pendiente |
 | Alineación de NASA POWER y ONI (`data/exogenous.py`) | Disponible |
-| Formato long y variables predictoras (`features/`) | Pendiente |
+| Formato long y variables predictoras (`features/`) | Disponible (rezagos aguas arriba, lluvia, ONI y calendario) |
 | Métricas MAE, RMSE, MASE, NSE, KGE | Pendiente |
 | Baselines y AutoARIMA (statsforecast) | Pendiente |
 | XGBoost (mlforecast) | Pendiente |
@@ -627,6 +627,24 @@ trimestrales a una serie diaria mediante *forward fill*. Antes de esa expansión
 el retraso de publicación configurado en `configs/data.yaml` (tres meses), para evitar
 fuga de información. Los nulos de lluvia anteriores a 1981 se conservan y se reportan
 como `DataQualityWarning`; no se imputan automáticamente.
+
+Con `BUILD_RIVER_FEATURES = True` (variable de control al inicio de
+`scripts/build_exogenous_dataset.py`), el script aplica además las features rezagadas
+configuradas en `configs/data.yaml`:
+
+| Columna | Contenido |
+|---|---|
+| `<estacion>_lag_<n>` | Nivel de la estación desplazado `n` días; ARIMAX solo usa los de estaciones aguas arriba. |
+| `rain_<estacion>_lag_<n>` | Lluvia propia rezagada `n` días. |
+| `oni_lag_<n>` | ONI rezagado `n` días. |
+| `sin_doy`, `cos_doy` | Ciclo anual determinista (y armónicos opcionales). |
+
+El orden aguas arriba se define una sola vez en `features.river_order`:
+`ayacucho → caicara → ciudad_bolivar → palua`. Para el horizonte de 14 días, ARIMAX
+selecciona solo rezagos `>= min_exog_lag` (14 por defecto), de modo que cada exógena
+futura ya está observada en el corte. Los rezagos propios menores que el horizonte
+quedan disponibles para otros modelos; en ARIMAX la inercia propia la aportan los
+términos AR.
 
 ---
 

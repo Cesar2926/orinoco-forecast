@@ -33,7 +33,7 @@ El plan se apoya en tres principios:
 | Horizonte | `h = 14` | Lo exige el enunciado. |
 | Targets | `ciudad_bolivar`, `palua` | Se modelan juntos como modelo global (un `unique_id` por estación), de modo que un solo modelo aprende de ambas series. |
 | Estacionalidad anual | Términos de Fourier, período 365,25 días, K = 3 a 5 pares seno/coseno, como covariable futura | El ciclo anual se conoce de antemano, así que no hay fuga. Evita que ARIMA necesite `season_length=365`, que es inviable, y que las redes necesiten una ventana de un año para ver la estación. Es la recomendación de Hyndman para estacionalidades largas ([long seasonality](https://robjhyndman.com/hyndsight/longseasonality/)). Se generan con `utilsforecast.feature_engineering.fourier` ([referencia](https://nixtlaverse.nixtla.io/utilsforecast/feature_engineering)). |
-| Estaciones aguas arriba | Ayacucho y Caicara como covariables **históricas** | Una crecida en Ayacucho llega días después a Ciudad Bolívar. Solo se usa su pasado. |
+| Estaciones aguas arriba | Ayacucho y Caicara; para Palúa también Ciudad Bolívar, como covariables **históricas** | Una crecida en Ayacucho llega días después a Ciudad Bolívar y desde allí a Palúa. Solo se usa su pasado. |
 | Función de pérdida | MAE | Coincide con la métrica de selección; optimizar una métrica y elegir con otra es incoherente. |
 | Escalado | `robust` (mediana y rango intercuartil) en las redes | Las crecidas son valores extremos legítimos que distorsionan un escalado por media y desviación estándar. |
 | Ventanas de validación | `n_windows=24`, `step_size=30`, todas antes de `test_start = 2023-01-01` | En `neuralforecast` el `step_size` vale 1 por defecto ([core](https://nixtlaverse.nixtla.io/neuralforecast/core.html)); debe fijarse en las tres librerías para que las ventanas coincidan. |
@@ -69,7 +69,7 @@ el análisis exploratorio, debe confirmar este rango con los propios datos.
 | `max_d` | 2 | La diferenciación la decide la prueba KPSS (`test='kpss'`). |
 | `ic` | `'aicc'` | Criterio de información corregido para muestras finitas; penaliza los modelos con más parámetros. |
 | `stepwise` | `True` | Búsqueda de Hyndman–Khandakar en lugar de probar todas las combinaciones. |
-| Regresores | Fourier + Ayacucho y Caicara **rezagadas al menos 14 días** | ARIMAX necesita los valores de cada regresor durante los 14 días pronosticados; con rezago de 14 días o más ya están observados en el día del corte. |
+| Regresores | Fourier + Ayacucho y Caicara **rezagadas al menos 14 días**; para Palúa también Ciudad Bolívar | ARIMAX necesita los valores de cada regresor durante los 14 días pronosticados; con rezago de 14 días o más ya están observados en el día del corte. |
 | Ventana de entrenamiento | Últimos 10 a 15 años por corte | Reajustar ARIMA sobre 18 000 puntos en 24 ventanas es costoso, y la dinámica reciente es la más relevante. |
 
 Referencia: [AutoARIMA en statsforecast](https://nixtlaverse.nixtla.io/statsforecast/src/core/models.html).

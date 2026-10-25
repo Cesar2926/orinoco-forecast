@@ -1,9 +1,22 @@
-"""Point-forecast metrics (MAE, RMSE, MASE, NSE, KGE) and per-horizon CV scoring.
+"""Métricas de evaluación de pronósticos y puntuación por horizonte de la CV.
 
-Metric functions take array-likes and return a float. ``evaluate_cv`` scores a
-cross-validation frame ``unique_id, ds, cutoff, y, <model columns>``.
+- MAE y RMSE en las unidades del objetivo.
+- sMAPE: ``mean(2|y - yhat| / (|y| + |yhat|))``, en ``[0, 2]``.
+- MAPE: solo se calcula si ningún ``y_true`` está cerca de cero; en ese caso
+  falla en lugar de producir un valor inestable.
+- NSE y KGE: eficiencias hidrológicas (1 es perfecto).
+- Hay dos variantes de MASE. ``mase`` escala el MAE por la persistencia
+  estacional de 365 días calculada **solo con el histórico de entrenamiento**.
+  ``mase_horizon`` escala por la persistencia a ``season`` días y es la que usan
+  ``evaluate_cv`` y el protocolo de selección de modelos.
+
+``evaluate_cv`` puntúa un marco de validación cruzada
+``unique_id, ds, cutoff, y, <columnas de modelos>``.
 """
 
+from __future__ import annotations
+
+import math
 from collections.abc import Sequence
 
 import numpy as np
@@ -11,7 +24,27 @@ import numpy.typing as npt
 import polars as pl
 
 ArrayLike = npt.ArrayLike
+SeriesLike = pl.Series | Sequence[float]
 METRICS = ("mae", "rmse", "mase", "nse", "kge")
+
+
+def _as_series(values: SeriesLike, name: str) -> pl.Series:
+    series = values if isinstance(values, pl.Series) else pl.Series(name, list(values))
+    return series.cast(pl.Float64)
+
+
+def _paired(y_true: SeriesLike, y_pred: SeriesLike) -> tuple[pl.Series, pl.Series]:
+    true = _as_series(y_true, "y_true")
+    pred = _as_series(y_pred, "y_pred")
+    if true.len() != pred.len():
+        raise ValueError("y_true y y_pred deben tener la misma longitud.")
+    if true.is_empty():
+        raise ValueError("La comparación no puede estar vacía.")
+    if true.null_count() or pred.null_count():
+        raise ValueError("Las métricas no aceptan valores nulos.")
+    if not true.is_finite().all() or not pred.is_finite().all():
+        raise ValueError("Las métricas requieren valores finitos.")
+    return true, pred
 
 
 def _pair(y_true: ArrayLike, y_pred: ArrayLike) -> tuple[np.ndarray, np.ndarray]:
@@ -24,16 +57,91 @@ def _pair(y_true: ArrayLike, y_pred: ArrayLike) -> tuple[np.ndarray, np.ndarray]
     return t, p
 
 
-def mae(y_true: ArrayLike, y_pred: ArrayLike) -> float:
-    """Error absoluto medio, en las unidades de ``y`` (metros)."""
-    t, p = _pair(y_true, y_pred)
-    return float(np.mean(np.abs(t - p)))
+def mae(y_true: SeriesLike, y_pred: SeriesLike) -> float:
+    """Error absoluto medio."""
+    true, pred = _paired(y_true, y_pred)
+    return float((true - pred).abs().mean())
 
 
-def rmse(y_true: ArrayLike, y_pred: ArrayLike) -> float:
-    """Raíz del error cuadrático medio, en las unidades de ``y``."""
-    t, p = _pair(y_true, y_pred)
-    return float(np.sqrt(np.mean((t - p) ** 2)))
+def rmse(y_true: SeriesLike, y_pred: SeriesLike) -> float:
+    """Raíz del error cuadrático medio."""
+    true, pred = _paired(y_true, y_pred)
+    return math.sqrt(float(((true - pred) ** 2).mean()))
+
+
+def smape(y_true: SeriesLike, y_pred: SeriesLike) -> float:
+    """sMAPE simétrico en ``[0, 2]``; ``0/0`` cuenta como error cero."""
+    true, pred = _paired(y_true, y_pred)
+    difference = (true - pred).abs()
+    denominator = true.abs() + pred.abs()
+    return float((2 * difference / denominator).fill_nan(0.0).mean())
+
+
+def mape(
+    y_true: SeriesLike,
+    y_pred: SeriesLike,
+    *,
+    epsilon: float = 1e-9,
+) -> float:
+    """MAPE, solo definido si ``|y_true| > epsilon`` en todas las filas."""
+    if epsilon < 0:
+        raise ValueError("epsilon no puede ser negativo.")
+    true, pred = _paired(y_true, y_pred)
+    if (true.abs() <= epsilon).any():
+        raise ValueError("MAPE no está definido cerca de cero; usa MAE o sMAPE.")
+    return float(((true - pred).abs() / true.abs()).mean())
+
+
+def seasonal_scale(history: pl.DataFrame, *, seasonality: int = 365) -> float:
+    """Error absoluto medio de la persistencia estacional en entrenamiento.
+
+    Se empareja cada fecha con la de ``seasonality`` días después; los pares
+    con nulos se ignoran. Es el denominador del MASE.
+    """
+    if seasonality < 1:
+        raise ValueError("seasonality debe ser positiva.")
+    required = {"ds", "y"}
+    missing = required.difference(history.columns)
+    if missing:
+        raise ValueError(f"Faltan columnas requeridas: {sorted(missing)}")
+    if history.schema["ds"] != pl.Date:
+        raise ValueError(f"ds debe ser pl.Date, no {history.schema['ds']}.")
+    if not history.schema["y"].is_numeric():
+        raise ValueError(f"y debe ser numérica, no {history.schema['y']}.")
+    if history["ds"].null_count():
+        raise ValueError("ds no puede contener nulos.")
+    if history["ds"].is_duplicated().any():
+        raise ValueError(
+            "El histórico contiene fechas duplicadas; la escala estacional "
+            "no se puede calcular sin ambigüedad."
+        )
+
+    paired = history.select("ds", "y").join(
+        history.select(
+            (pl.col("ds") + pl.duration(days=seasonality)).alias("ds"),
+            pl.col("y").alias("y_lag"),
+        ),
+        on="ds",
+        how="inner",
+    )
+    errors = (paired["y"] - paired["y_lag"]).abs().drop_nulls()
+    if errors.is_empty():
+        raise ValueError(f"No hay pares estacionales para seasonality={seasonality}.")
+    scale = float(errors.mean())
+    if scale == 0:
+        raise ValueError("La escala estacional es cero; MASE no está definido.")
+    return scale
+
+
+def mase(
+    y_true: SeriesLike,
+    y_pred: SeriesLike,
+    history: pl.DataFrame,
+    *,
+    seasonality: int = 365,
+) -> float:
+    """MAE escalado por la persistencia estacional del entrenamiento."""
+    return mae(y_true, y_pred) / seasonal_scale(history, seasonality=seasonality)
 
 
 def naive_scale(y_train: ArrayLike, season: int = 1) -> float:
@@ -44,7 +152,7 @@ def naive_scale(y_train: ArrayLike, season: int = 1) -> float:
     return float(np.mean(np.abs(train[season:] - train[:-season])))
 
 
-def mase(
+def mase_horizon(
     y_true: ArrayLike, y_pred: ArrayLike, y_train: ArrayLike, season: int = 1
 ) -> float:
     """MAE escalado por el MAE de la persistencia (lag ``season``) en ``y_train``.
@@ -88,10 +196,11 @@ def evaluate_cv(
 
     - ``horizon`` (String) es ``(ds - cutoff)`` en días (``"1"``…``"14"``) o
       ``"all"`` para todas las filas de la serie.
-    - MASE ajustado al horizonte: en el paso ``h`` es ``MAE_h`` dividido por el
-      MAE de la persistencia a ``h`` días (``|y_t - y_{t-h}|``) en entrenamiento,
-      así la persistencia vale ~1 en cada paso. En ``"all"`` es la media de los
-      ``MASE_h``; las demás métricas de ``"all"`` usan todas las filas juntas.
+    - MASE ajustado al horizonte (``mase_horizon``): en el paso ``h`` es
+      ``MAE_h`` dividido por el MAE de la persistencia a ``h`` días
+      (``|y_t - y_{t-h}|``) en entrenamiento, así la persistencia vale ~1 en
+      cada paso. En ``"all"`` es la media de los ``MASE_h``; las demás métricas
+      de ``"all"`` usan todas las filas juntas.
     - La escala se calcula por ``unique_id`` con las filas de ``train_df`` hasta
       el **primer** ``cutoff``: es la misma para todas las ventanas y nunca usa
       datos posteriores a un corte evaluado.
@@ -115,7 +224,7 @@ def evaluate_cv(
             per_h = []
             for (h,), group in steps:
                 t, p = group["y"].to_numpy(), group[model].to_numpy()
-                score = {**_score(t, p), "mase": mase(t, p, y_train, season=h)}
+                score = {**_score(t, p), "mase": mase_horizon(t, p, y_train, season=h)}
                 per_h.append(score["mase"])
                 rows.append(
                     {

@@ -1,1 +1,1 @@
-"""Statistical model placeholders."""
+"""Statistical forecasters: persistence baselines and ARIMA."""
