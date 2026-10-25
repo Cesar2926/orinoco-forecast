@@ -14,7 +14,16 @@ def _baselines() -> ForecastRunner:
     return BaselinesRunner()
 
 
-RUNNERS: dict[str, Callable[[], ForecastRunner]] = {"baselines": _baselines}
+def _xgboost() -> ForecastRunner:
+    from orinoco_forecast.models.trees.tree import XGBoostRunner
+
+    return XGBoostRunner()
+
+
+RUNNERS: dict[str, Callable[[], ForecastRunner]] = {
+    "baselines": _baselines,
+    "xgboost": _xgboost,
+}
 
 
 def get_runner(name: str) -> ForecastRunner:

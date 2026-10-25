@@ -1,13 +1,15 @@
 """Run the shared cross-validation for one registered model.
 
 Usage: ``uv run python scripts/run_model.py baselines [--stage A|B] [--final-test]``.
-Writes data/predictions/<model>/cv.parquet and metrics.parquet.
+Writes data/predictions/<model>/cv.parquet and metrics.parquet, plus
+feature_importance.parquet for runners that expose ``feature_importance``.
 """
 
 import argparse
 
 import polars as pl
 
+from orinoco_forecast.data.loading import repo_root
 from orinoco_forecast.evaluation.backtest import load_backtest_config, run_cv
 from orinoco_forecast.features.dataset import build_model_frame
 from orinoco_forecast.models.registry import RUNNERS, get_runner
@@ -34,6 +36,13 @@ def main() -> None:
     frame = build_model_frame(args.stage)
     cv, metrics = run_cv(args.model, runner, frame, cfg, final_test=args.final_test)
 
+    importance = None
+    # Fit on the development rows only; never on the final test run.
+    if hasattr(runner, "feature_importance") and not args.final_test:
+        importance = runner.feature_importance(frame, cfg)
+        out = repo_root() / "data" / "predictions" / args.model
+        importance.write_parquet(out / "feature_importance.parquet")
+
     summary = metrics.filter(pl.col("horizon") == "all").drop("horizon")
     # ASCII borders: Windows consoles default to cp1252 and cannot encode box chars.
     with pl.Config(
@@ -48,6 +57,9 @@ def main() -> None:
             f"{cv.height} predicciones. Métricas h=1..{cfg['horizon']}:"
         )
         print(summary)
+        if importance is not None:
+            print("Importancia por ganancia (top 10):")
+            print(importance.head(10))
 
 
 if __name__ == "__main__":

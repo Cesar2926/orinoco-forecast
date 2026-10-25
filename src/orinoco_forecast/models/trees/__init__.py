@@ -1,1 +1,1 @@
-"""Tree-model placeholders."""
+"""Tree ensembles: XGBoost via mlforecast (``tree.XGBoostRunner``)."""
