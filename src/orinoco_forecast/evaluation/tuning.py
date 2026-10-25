@@ -71,7 +71,9 @@ def suggest_tcn(trial: optuna.Trial, base: dict[str, Any]) -> dict[str, Any]:
             "encoder_hidden_size", [32, 64, 128]
         ),
         "learning_rate": trial.suggest_float("learning_rate", 1e-4, 3e-3, log=True),
-        "max_steps": trial.suggest_categorical("max_steps", [1000, 2000]),
+        # {500, 1000}, not {1000, 2000}: one CPU trial at 1000 steps with the
+        # largest net took ~9 min, so 2000 steps projected 20 trials over 2 h.
+        "max_steps": trial.suggest_categorical("max_steps", [500, 1000]),
         "seeds": TUNING_SEEDS,
     }
     field = receptive_field(params["kernel_size"], params["dilations"])
