@@ -311,7 +311,7 @@ modelos.
 |---|---|---|
 | MAE | Error absoluto medio, en metros. | Más bajo es mejor. |
 | RMSE | Raíz del error cuadrático medio, en metros. | Penaliza más los errores grandes (crecidas mal predichas). |
-| MASE | MAE escalado por el error de la persistencia en entrenamiento. | Menor que 1 significa que el modelo supera a la persistencia. |
+| MASE | MAE de cada día del horizonte `h` escalado por el error de la persistencia a `h` días en entrenamiento. | Menor que 1 significa que el modelo supera a la persistencia. |
 | NSE | Eficiencia de Nash-Sutcliffe, estándar en hidrología. | 1 es perfecto; 0 equivale a predecir la media; negativo es peor que la media. |
 | KGE | Eficiencia de Kling-Gupta: combina correlación, sesgo y variabilidad. | 1 es perfecto. |
 
@@ -356,7 +356,10 @@ proyecto:
    (`futr_exog_list`).
 3. **Preprocesamiento ajustado solo en entrenamiento.** El escalado y la imputación de
    nulos se calculan dentro de cada ventana, usando únicamente sus datos de entrenamiento.
-   Ningún dato se imputa usando valores posteriores al corte.
+   Ningún dato se imputa usando valores posteriores al corte. Los huecos cortos se
+   interpolan una sola vez sobre la serie completa, y `assert_no_imputation_near_cutoffs`
+   verifica que ningún valor imputado quede a `horizon` días o menos de un corte; para
+   las ventanas evaluadas eso equivale a imputar dentro de cada ventana.
 4. **ONI con retraso de publicación.** El índice ONI es un promedio móvil de tres meses que
    se publica después de que termina el período; se desplaza en el tiempo para usar solo
    valores que ya estaban publicados en cada fecha.
