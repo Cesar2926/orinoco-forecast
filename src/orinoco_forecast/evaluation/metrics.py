@@ -77,26 +77,24 @@ def kge(y_true: ArrayLike, y_pred: ArrayLike) -> float:
     return float(1.0 - np.sqrt((r - 1) ** 2 + (alpha - 1) ** 2 + (beta - 1) ** 2))
 
 
-def _score(t: np.ndarray, p: np.ndarray, scale: float) -> dict[str, float]:
-    return {
-        "mae": mae(t, p),
-        "rmse": rmse(t, p),
-        "mase": mae(t, p) / scale,
-        "nse": nse(t, p),
-        "kge": kge(t, p),
-    }
+def _score(t: np.ndarray, p: np.ndarray) -> dict[str, float]:
+    return {"mae": mae(t, p), "rmse": rmse(t, p), "nse": nse(t, p), "kge": kge(t, p)}
 
 
 def evaluate_cv(
-    cv_df: pl.DataFrame, models: Sequence[str], train_df: pl.DataFrame, season: int
+    cv_df: pl.DataFrame, models: Sequence[str], train_df: pl.DataFrame
 ) -> pl.DataFrame:
     """Métricas por ``unique_id`` x modelo x paso del horizonte, más ``"all"``.
 
     - ``horizon`` (String) es ``(ds - cutoff)`` en días (``"1"``…``"14"``) o
       ``"all"`` para todas las filas de la serie.
-    - La escala del MASE se calcula por ``unique_id`` con las filas de
-      ``train_df`` hasta el **primer** ``cutoff``: así es la misma para todas las
-      ventanas y nunca usa datos posteriores a un corte evaluado.
+    - MASE ajustado al horizonte: en el paso ``h`` es ``MAE_h`` dividido por el
+      MAE de la persistencia a ``h`` días (``|y_t - y_{t-h}|``) en entrenamiento,
+      así la persistencia vale ~1 en cada paso. En ``"all"`` es la media de los
+      ``MASE_h``; las demás métricas de ``"all"`` usan todas las filas juntas.
+    - La escala se calcula por ``unique_id`` con las filas de ``train_df`` hasta
+      el **primer** ``cutoff``: es la misma para todas las ventanas y nunca usa
+      datos posteriores a un corte evaluado.
     - Las filas con ``y`` o predicción nula se descartan antes de puntuar.
 
     Devuelve ``unique_id, model, horizon, n`` y una columna por métrica.
@@ -110,25 +108,35 @@ def evaluate_cv(
         history = train_df.filter(
             (pl.col("unique_id") == uid) & (pl.col("ds") <= first_cutoff)
         ).sort("ds")
-        scale = naive_scale(history["y"].drop_nulls().to_numpy(), season)
+        y_train = history["y"].drop_nulls().to_numpy()
         for model in models:
             valid = part.drop_nulls(["y", model])
-            groups = [
-                (str(h), g) for (h,), g in valid.partition_by("h", as_dict=True).items()
-            ]
-            for horizon, group in sorted(groups, key=lambda kv: int(kv[0])) + [
-                ("all", valid)
-            ]:
+            steps = sorted(valid.partition_by("h", as_dict=True).items())
+            per_h = []
+            for (h,), group in steps:
                 t, p = group["y"].to_numpy(), group[model].to_numpy()
+                score = {**_score(t, p), "mase": mase(t, p, y_train, season=h)}
+                per_h.append(score["mase"])
                 rows.append(
                     {
                         "unique_id": uid,
                         "model": model,
-                        "horizon": horizon,
+                        "horizon": str(h),
                         "n": group.height,
-                        **_score(t, p, scale),
+                        **score,
                     }
                 )
+            t, p = valid["y"].to_numpy(), valid[model].to_numpy()
+            rows.append(
+                {
+                    "unique_id": uid,
+                    "model": model,
+                    "horizon": "all",
+                    "n": valid.height,
+                    **_score(t, p),
+                    "mase": float(np.mean(per_h)),
+                }
+            )
     schema = {
         "unique_id": pl.String,
         "model": pl.String,

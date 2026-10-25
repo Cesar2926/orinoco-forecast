@@ -5,9 +5,7 @@ horizon: 14 # Daily forecast horizon, shared by every model.
 step_size: 30 # Days between consecutive cross-validation cutoffs.
 n_windows: 24 # Rolling-origin windows evaluated before test_start.
 test_start: "2023-01-01" # Held-out test period; never used for model selection.
-seasonality: 365 # SeasonalNaive period.
-# MASE scale: in-sample MAE of persistence (lag 1), as defined in the README.
-mase_season: 1
+seasonality: 365 # SeasonalNaive period (MASE is horizon-matched, not seasonal).
 # Train once per model on the data before the first cutoff and roll forward over
 # the windows. Same policy for every model (fairness) and 24x cheaper for neural
 # models than refitting per window.

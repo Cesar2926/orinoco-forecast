@@ -112,7 +112,7 @@ def run_cv(
             f"{name}: el runner usó cortes distintos a los del protocolo "
             f"({len(got)} vs {len(expected)} esperados)."
         )
-    metrics = evaluate_cv(cv, runner.model_columns, train, run_cfg["mase_season"])
+    metrics = evaluate_cv(cv, runner.model_columns, train)
 
     root = Path(output_root) if output_root else repo_root() / "data" / "predictions"
     out_dir = root / name / "final_test" if final_test else root / name

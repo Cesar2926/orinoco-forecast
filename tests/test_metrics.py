@@ -3,6 +3,7 @@
 import math
 from datetime import date, timedelta
 
+import numpy as np
 import polars as pl
 import pytest
 
@@ -71,12 +72,39 @@ def _cv_frame() -> tuple[pl.DataFrame, pl.DataFrame]:
 
 def test_evaluate_cv_per_horizon_and_all() -> None:
     cv, train = _cv_frame()
-    out = evaluate_cv(cv, ["good", "bad"], train, season=1)
+    out = evaluate_cv(cv, ["good", "bad"], train)
     assert out.height == 2 * 3  # 2 models x (h=1, h=2, all)
     assert set(out["horizon"]) == {"1", "2", "all"}
     good = out.filter(pl.col("model") == "good")
     assert good["mae"].to_list() == [0.0, 0.0, 0.0]
-    bad_all = out.filter((pl.col("model") == "bad") & (pl.col("horizon") == "all"))
+    bad = out.filter(pl.col("model") == "bad")
+    mase_by_h = dict(zip(bad["horizon"], bad["mase"], strict=True))
+    # MAE 2 at every step; lag-1 scale 2, lag-2 scale (1 + 2) / 2 = 1.5.
+    assert mase_by_h["1"] == pytest.approx(1.0)
+    assert mase_by_h["2"] == pytest.approx(2 / 1.5)
+    assert mase_by_h["all"] == pytest.approx((1.0 + 2 / 1.5) / 2)
+    bad_all = bad.filter(pl.col("horizon") == "all")
     assert bad_all["mae"].item() == pytest.approx(2.0)
-    assert bad_all["mase"].item() == pytest.approx(1.0)  # naive scale = 2
     assert bad_all["n"].item() == 4
+
+
+def test_evaluate_cv_naive_on_random_walk_has_mase_near_one() -> None:
+    rng = np.random.default_rng(0)
+    n, horizon = 5000, 14
+    days = [date(2000, 1, 1) + timedelta(days=i) for i in range(n)]
+    y = np.cumsum(rng.normal(size=n))
+    train = pl.DataFrame({"unique_id": "rw", "ds": days, "y": y})
+    rows = [
+        ("rw", days[c + h], days[c], y[c + h], y[c])
+        for c in range(2000, n - horizon, 15)
+        for h in range(1, horizon + 1)
+    ]
+    cv = pl.DataFrame(
+        rows, schema=["unique_id", "ds", "cutoff", "y", "Naive"], orient="row"
+    )
+    out = evaluate_cv(cv, ["Naive"], train)
+    per_h = out.filter(pl.col("horizon") != "all")["mase"]
+    assert per_h.len() == horizon
+    assert per_h.to_list() == pytest.approx([1.0] * horizon, abs=0.15)
+    all_mase = out.filter(pl.col("horizon") == "all")["mase"].item()
+    assert all_mase == pytest.approx(per_h.mean())
