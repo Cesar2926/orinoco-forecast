@@ -1,7 +1,8 @@
 """Read-only data shaping for the dashboard (no training, no final test).
 
-Reads ``data/predictions/<model>/{cv,metrics}.parquet`` written by
-``scripts/run_model.py`` and returns tidy Polars frames for the charts.
+Reads ``data/predictions/<model>/stage_<A|B>/{cv,metrics}.parquet`` written by
+``scripts/run_model.py`` and returns tidy Polars frames for the charts. Files left
+at ``<model>/`` by runs before the stage split are ignored.
 """
 
 import os
@@ -13,7 +14,7 @@ import polars as pl
 
 from orinoco_forecast.data.loading import repo_root
 from orinoco_forecast.data.quality import QUALITY_LABELS
-from orinoco_forecast.evaluation.backtest import CV_KEYS
+from orinoco_forecast.evaluation.backtest import CV_KEYS, stage_dir
 from orinoco_forecast.evaluation.metrics import relative_to_baseline
 
 PREDICTIONS_ENV = "ORINOCO_PREDICTIONS_DIR"
@@ -21,6 +22,7 @@ BASELINES = "baselines"
 HISTORY_DAYS = 60
 SEED_MEAN_LABEL = "{} (media de semillas)"
 TABLE_METRICS = ("mae", "rel_mae", "rmse", "mase", "nse", "kge")
+STAGE_LABELS = {"A": "Etapa A: solo río", "B": "Etapa B: río + lluvia + ONI"}
 _SEED = r"^(.+)_s\d+$"
 
 
@@ -30,19 +32,20 @@ def predictions_root() -> Path:
     return Path(override) if override else repo_root() / "data" / "predictions"
 
 
-def run_command(model: str = "<modelo>") -> str:
+def run_command(model: str = "<modelo>", stage: str = "A") -> str:
     """Comando que genera las predicciones de validación de ``model``."""
-    return f"uv run python scripts/run_model.py {model}"
+    return f"uv run python scripts/run_model.py {model} --stage {stage}"
 
 
-def discover_models(root: Path) -> list[str]:
-    """Modelos con ``cv.parquet`` y ``metrics.parquet``; los baselines primero."""
+def discover_models(root: Path, stage: str = "A") -> list[str]:
+    """Modelos con ``stage_<etapa>/{cv,metrics}.parquet``; los baselines primero."""
     if not root.is_dir():
         return []
     found = [
         p.name
         for p in root.iterdir()
-        if (p / "cv.parquet").is_file() and (p / "metrics.parquet").is_file()
+        if (stage_dir(root, p.name, stage) / "cv.parquet").is_file()
+        and (stage_dir(root, p.name, stage) / "metrics.parquet").is_file()
     ]
     return sorted(found, key=lambda name: (name != BASELINES, name))
 
@@ -51,18 +54,20 @@ def _family() -> pl.Expr:
     return pl.coalesce(pl.col("model").str.extract(_SEED), pl.col("model"))
 
 
-def load_metrics(root: Path, models: list[str]) -> pl.DataFrame:
-    """Métricas de todos los modelos, con ``rel_mae`` (MAE / MAE de Naive).
+def load_metrics(root: Path, models: list[str], stage: str = "A") -> pl.DataFrame:
+    """Métricas de todos los modelos de una etapa, con ``rel_mae``.
 
-    ``rel_mae`` queda nulo si no hay baselines o si las ventanas no coinciden
-    (en ese caso se emite un warning, sin corregir nada).
+    ``rel_mae`` = MAE / MAE de Naive de la MISMA etapa. Queda nulo si no hay
+    baselines o si las ventanas no coinciden (con un warning, sin corregir nada).
     """
     baseline = None
     if BASELINES in models:
-        baseline = pl.read_parquet(root / BASELINES / "metrics.parquet")
+        baseline = pl.read_parquet(
+            stage_dir(root, BASELINES, stage) / "metrics.parquet"
+        )
     frames = []
     for model in models:
-        metrics = pl.read_parquet(root / model / "metrics.parquet")
+        metrics = pl.read_parquet(stage_dir(root, model, stage) / "metrics.parquet")
         rel = pl.lit(None, dtype=pl.Float64).alias("rel_mae")
         if baseline is not None:
             try:
@@ -119,6 +124,49 @@ def selection_table(metrics: pl.DataFrame) -> pl.DataFrame:
     )
 
 
+def stage_comparison(metrics_a: pl.DataFrame, metrics_b: pl.DataFrame) -> pl.DataFrame:
+    """MAE y ``rel_mae`` (h=1..14) de cada modelo en la etapa A frente a la B.
+
+    Las semillas se promedian por familia. ``delta_mae`` = MAE B - MAE A
+    (negativo: la lluvia y el ONI ayudan). Nulo si una etapa no se ejecutó.
+    """
+
+    def summary(metrics: pl.DataFrame, stage: str) -> pl.DataFrame:
+        if metrics.is_empty():
+            schema = {"unique_id": pl.String, "model": pl.String}
+            schema |= {f"mae_{stage}": pl.Float64, f"rel_mae_{stage}": pl.Float64}
+            return pl.DataFrame(schema=schema)
+        return (
+            metrics.filter(pl.col("horizon") == "all")
+            .group_by("unique_id", pl.col("family").alias("model"))
+            .agg(
+                pl.col("mae").mean().alias(f"mae_{stage}"),
+                pl.col("rel_mae").mean().alias(f"rel_mae_{stage}"),
+            )
+        )
+
+    return (
+        summary(metrics_a, "A")
+        .join(
+            summary(metrics_b, "B"),
+            on=["unique_id", "model"],
+            how="full",
+            coalesce=True,
+        )
+        .with_columns(delta_mae=pl.col("mae_B") - pl.col("mae_A"))
+        .select(
+            "unique_id",
+            "model",
+            "mae_A",
+            "mae_B",
+            "delta_mae",
+            "rel_mae_A",
+            "rel_mae_B",
+        )
+        .sort("unique_id", "mae_A", nulls_last=True)
+    )
+
+
 def horizon_errors(metrics: pl.DataFrame, unique_id: str) -> pl.DataFrame:
     """MAE por día de horizonte (1..14) de una estación, en formato largo."""
     return (
@@ -145,7 +193,7 @@ def _with_seed_means(cv: pl.DataFrame) -> pl.DataFrame:
     return cv.with_columns(means) if means else cv
 
 
-def load_forecasts(root: Path, models: list[str]) -> pl.DataFrame:
+def load_forecasts(root: Path, models: list[str], stage: str = "A") -> pl.DataFrame:
     """Predicciones de validación en formato largo (``model``, ``y_hat``).
 
     Las semillas se conservan y además se agrega su predicción media
@@ -153,7 +201,9 @@ def load_forecasts(root: Path, models: list[str]) -> pl.DataFrame:
     """
     frames = []
     for model in models:
-        cv = _with_seed_means(pl.read_parquet(root / model / "cv.parquet"))
+        cv = _with_seed_means(
+            pl.read_parquet(stage_dir(root, model, stage) / "cv.parquet")
+        )
         value_cols = [c for c in cv.columns if c not in CV_KEYS]
         frames.append(
             cv.with_columns(pl.col(value_cols).cast(pl.Float64)).unpivot(

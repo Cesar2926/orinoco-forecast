@@ -17,6 +17,47 @@ from orinoco_forecast.features.dataset import assert_no_imputation_near_cutoffs
 from orinoco_forecast.models.base import ForecastRunner
 
 CV_KEYS = ["unique_id", "ds", "cutoff", "y"]
+STAGES = ("A", "B")
+BASELINES = "baselines"
+
+
+def predictions_dir() -> Path:
+    """Carpeta raíz de predicciones (``data/predictions``)."""
+    return repo_root() / "data" / "predictions"
+
+
+def stage_dir(root: str | Path, name: str, stage: str) -> Path:
+    """``<root>/<name>/stage_<A|B>``: cada etapa guarda sus propias salidas."""
+    if stage not in STAGES:
+        raise ValueError(f"Etapa desconocida: {stage!r} (use 'A' o 'B').")
+    return Path(root) / name / f"stage_{stage}"
+
+
+def stage_baseline_metrics(
+    root: str | Path, stage: str, final_test: bool = False
+) -> pl.DataFrame:
+    """Métricas de los baselines de la MISMA etapa (para ``rel_mae``).
+
+    Nunca usa otra etapa ni archivos antiguos en la raíz del modelo: cada etapa
+    construye su propia tabla (la B empieza en 1981), así que mezclar etapas en
+    silencio podría comparar contra un Naive evaluado sobre otra serie.
+    ``FileNotFoundError`` si no existen.
+    """
+    out = stage_dir(root, BASELINES, stage)
+    path = (
+        out / "final_test" / "metrics.parquet"
+        if final_test
+        else out / "metrics.parquet"
+    )
+    if not path.is_file():
+        block = "del test final" if final_test else "de validación"
+        flag = " --final-test" if final_test else ""
+        raise FileNotFoundError(
+            f"Faltan las métricas {block} de los baselines de la etapa {stage} "
+            f"({path}). Ejecute primero `uv run python scripts/run_model.py "
+            f"baselines --stage {stage}{flag}`."
+        )
+    return pl.read_parquet(path)
 
 
 def load_backtest_config(path: str | Path | None = None) -> dict[str, Any]:
@@ -121,21 +162,25 @@ def run_cv(
     cfg: dict[str, Any],
     final_test: bool = False,
     output_root: str | Path | None = None,
+    stage: str = "A",
 ) -> tuple[pl.DataFrame, pl.DataFrame]:
     """Ejecuta la validación cruzada de ``runner`` y guarda predicciones y métricas.
 
     - Por defecto solo usa filas anteriores a ``test_start`` y escribe
-      ``<output_root>/<name>/cv.parquet`` y ``metrics.parquet``.
+      ``<output_root>/<name>/stage_<stage>/cv.parquet`` y ``metrics.parquet``
+      (``stage`` solo elige la carpeta; ``frame`` ya debe ser de esa etapa).
     - ``final_test=True`` evalúa el bloque de test final (ver
-      ``final_test_setup``) y escribe en ``<name>/final_test/``. Debe usarse una
-      sola vez, con el modelo ya elegido.
+      ``final_test_setup``) y escribe en ``stage_<stage>/final_test/``. Debe
+      usarse una sola vez, con el modelo ya elegido.
     - Antes de entrenar verifica que no haya valores imputados cerca de ningún
       corte (``assert_no_imputation_near_cutoffs``) y, después, que el runner
       haya usado exactamente esos cortes.
 
     ``output_root`` por defecto es ``data/predictions``.
     """
+    out_dir = stage_dir(output_root or predictions_dir(), name, stage)
     if final_test:
+        out_dir = out_dir / "final_test"
         data, run_cfg = final_test_setup(frame, cfg)
         train = development_frame(frame, cfg)
     else:
@@ -143,9 +188,6 @@ def run_cv(
         train = data
     cv = predict_cv(name, runner, data, run_cfg)
     metrics = evaluate_cv(cv, runner.model_columns, train)
-
-    root = Path(output_root) if output_root else repo_root() / "data" / "predictions"
-    out_dir = root / name / "final_test" if final_test else root / name
     out_dir.mkdir(parents=True, exist_ok=True)
     cv.write_parquet(out_dir / "cv.parquet")
     metrics.write_parquet(out_dir / "metrics.parquet")

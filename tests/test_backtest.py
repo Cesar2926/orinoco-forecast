@@ -11,6 +11,8 @@ from orinoco_forecast.evaluation.backtest import (
     development_frame,
     load_backtest_config,
     run_cv,
+    stage_baseline_metrics,
+    stage_dir,
 )
 from orinoco_forecast.features.dataset import assert_no_imputation_near_cutoffs
 
@@ -78,10 +80,12 @@ def test_run_cv_writes_outputs_without_test_block(tmp_path: Path) -> None:
     assert cv.columns == ["unique_id", "ds", "cutoff", "y", "Last"]
     assert cv["cutoff"].n_unique() == CFG["n_windows"]
     assert cv["ds"].max() < TEST_START
-    assert (tmp_path / "fake" / "cv.parquet").is_file()
-    assert (tmp_path / "fake" / "metrics.parquet").is_file()
+    out = tmp_path / "fake" / "stage_A"
+    assert (out / "cv.parquet").is_file()
+    assert (out / "metrics.parquet").is_file()
     assert set(metrics["horizon"]) == {*map(str, range(1, 15)), "all"}
-    assert not (tmp_path / "fake" / "final_test").exists()
+    assert not (out / "final_test").exists()
+    assert not (tmp_path / "fake" / "cv.parquet").exists()
 
 
 def test_run_cv_final_test_only_when_requested(tmp_path: Path) -> None:
@@ -93,8 +97,9 @@ def test_run_cv_final_test_only_when_requested(tmp_path: Path) -> None:
     assert cv["cutoff"].min() == TEST_START - timedelta(days=1)
     assert cv["ds"].min() == TEST_START
     assert runner.seen_cfg["step_size"] == h
-    assert (tmp_path / "fake" / "final_test" / "cv.parquet").is_file()
-    assert not (tmp_path / "fake" / "cv.parquet").exists()
+    out = tmp_path / "fake" / "stage_A"
+    assert (out / "final_test" / "cv.parquet").is_file()
+    assert not (out / "cv.parquet").exists()
 
 
 def test_run_cv_refuses_imputed_rows_near_cutoff(tmp_path: Path) -> None:
@@ -103,3 +108,38 @@ def test_run_cv_refuses_imputed_rows_near_cutoff(tmp_path: Path) -> None:
     frame = frame.with_columns(imputed=pl.col("ds") == dev_end)
     with pytest.raises(ValueError, match="imputad"):
         run_cv("fake", LastValueRunner(), frame, CFG, output_root=tmp_path)
+
+
+def test_run_cv_stages_do_not_overwrite_each_other(tmp_path: Path) -> None:
+    frame = _synthetic()
+    run_cv("fake", LastValueRunner(), frame, CFG, stage="A", output_root=tmp_path)
+    run_cv("fake", LastValueRunner(), frame, CFG, stage="B", output_root=tmp_path)
+    for stage in ("A", "B"):
+        out = stage_dir(tmp_path, "fake", stage)
+        assert out == tmp_path / "fake" / f"stage_{stage}"
+        assert (out / "cv.parquet").is_file()
+        assert (out / "metrics.parquet").is_file()
+
+
+def test_stage_dir_rejects_unknown_stage(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="Etapa"):
+        stage_dir(tmp_path, "fake", "C")
+
+
+def test_stage_baseline_metrics_requires_same_stage(tmp_path: Path) -> None:
+    run_cv(
+        "baselines",
+        LastValueRunner(),
+        _synthetic(),
+        CFG,
+        stage="A",
+        output_root=tmp_path,
+    )
+    base = stage_baseline_metrics(tmp_path, "A")
+    assert set(base["model"]) == {"Last"}
+    # Stage A baselines (or legacy root-level files) never stand in for stage B.
+    (tmp_path / "baselines" / "metrics.parquet").write_bytes(b"")
+    with pytest.raises(FileNotFoundError, match="etapa B"):
+        stage_baseline_metrics(tmp_path, "B")
+    with pytest.raises(FileNotFoundError, match="test final"):
+        stage_baseline_metrics(tmp_path, "A", final_test=True)

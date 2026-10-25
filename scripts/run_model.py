@@ -2,10 +2,11 @@
 
 Usage: ``uv run python scripts/run_model.py <model> [--stage A|B] [--final-test]
 [--max-steps N]``.
-Writes data/predictions/<model>/cv.parquet and metrics.parquet, plus
+Writes data/predictions/<model>/stage_<A|B>/cv.parquet and metrics.parquet, plus
 feature_importance.parquet for runners that expose ``feature_importance``.
-Prints ``rel_mae`` (MAE / Naive MAE) when the baselines were run first, and a
-mean ± std row across seeds for neural models (columns ``<model>_s<seed>``).
+Prints ``rel_mae`` (MAE / Naive MAE) against the baselines of the SAME stage,
+which must be run first, and a mean ± std row across seeds for neural models
+(columns ``<model>_s<seed>``).
 """
 
 import argparse
@@ -13,8 +14,14 @@ import math
 
 import polars as pl
 
-from orinoco_forecast.data.loading import repo_root
-from orinoco_forecast.evaluation.backtest import load_backtest_config, run_cv
+from orinoco_forecast.evaluation.backtest import (
+    BASELINES,
+    load_backtest_config,
+    predictions_dir,
+    run_cv,
+    stage_baseline_metrics,
+    stage_dir,
+)
 from orinoco_forecast.evaluation.metrics import relative_to_baseline
 from orinoco_forecast.features.dataset import build_model_frame
 from orinoco_forecast.models.registry import RUNNERS, get_runner
@@ -63,6 +70,15 @@ def main() -> None:
             "con el modelo ya elegido; mirarlo para decidir es fuga de datos."
         )
 
+    root = predictions_dir()
+    baseline = None
+    if args.model != BASELINES:
+        # Fail before training: rel_mae needs the baselines of the same stage.
+        try:
+            baseline = stage_baseline_metrics(root, args.stage, args.final_test)
+        except FileNotFoundError as err:
+            parser.error(str(err))
+
     cfg = load_backtest_config()
     runner = get_runner(args.model)
     if args.max_steps is not None:
@@ -71,27 +87,19 @@ def main() -> None:
             parser.error("--max-steps solo aplica a modelos neuronales.")
         runner.params = {**params, "max_steps": args.max_steps}
     frame = build_model_frame(args.stage)
-    cv, metrics = run_cv(args.model, runner, frame, cfg, final_test=args.final_test)
+    cv, metrics = run_cv(
+        args.model, runner, frame, cfg, final_test=args.final_test, stage=args.stage
+    )
 
-    root = repo_root() / "data" / "predictions"
-    out = root / args.model
+    out = stage_dir(root, args.model, args.stage)
     importance = None
     # Fit on the development rows only; never on the final test run.
     if hasattr(runner, "feature_importance") and not args.final_test:
         importance = runner.feature_importance(frame, cfg)
         importance.write_parquet(out / "feature_importance.parquet")
 
-    note = None
-    if args.model != "baselines":
-        sub = "final_test" if args.final_test else ""
-        base_file = root / "baselines" / sub / "metrics.parquet"
-        if base_file.exists():
-            metrics = relative_to_baseline(metrics, pl.read_parquet(base_file))
-        else:
-            note = (
-                "Nota: sin data/predictions/baselines; ejecute primero "
-                "`run_model.py baselines` para ver rel_mae (MAE / MAE de Naive)."
-            )
+    if baseline is not None:
+        metrics = relative_to_baseline(metrics, baseline)
     summary = metrics.filter(pl.col("horizon") == "all").drop("horizon")
     # ASCII borders: Windows consoles default to cp1252 and cannot encode box chars.
     with pl.Config(
@@ -111,8 +119,6 @@ def main() -> None:
         if seeds is not None:
             print("Media ± desviación estándar entre semillas (h=1..14):")
             print(seeds)
-        if note:
-            print(note)
         if importance is not None:
             print("Importancia por ganancia (top 10):")
             print(importance.head(10))

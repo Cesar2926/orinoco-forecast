@@ -2,7 +2,8 @@
 
 Uso: ``uv run streamlit run app/dashboard.py`` (o ``make dashboard``).
 Lee los niveles de ``data/raw`` y las predicciones de validación guardadas en
-``data/predictions/<modelo>/``; nunca entrena modelos ni lee el test final.
+``data/predictions/<modelo>/stage_<A|B>/``; nunca entrena modelos ni lee el test
+final. La etapa se elige en la barra lateral.
 ``ORINOCO_PREDICTIONS_DIR`` cambia la carpeta de predicciones (pruebas).
 """
 
@@ -15,7 +16,7 @@ import streamlit as st
 
 from orinoco_forecast.dashboard import charts, data
 from orinoco_forecast.data.loading import load_config, repo_root
-from orinoco_forecast.evaluation.backtest import load_backtest_config
+from orinoco_forecast.evaluation.backtest import load_backtest_config, stage_dir
 from orinoco_forecast.features.dataset import load_levels
 
 EXOGENOUS = repo_root() / "data" / "processed" / "orinoco_exogenous.parquet"
@@ -33,16 +34,30 @@ def cached_levels() -> pl.DataFrame:
 
 def _stamp(root: Path) -> tuple[tuple[str, float], ...]:
     """Fechas de modificación: invalidan la caché al regenerar predicciones."""
-    return tuple((str(p), p.stat().st_mtime) for p in sorted(root.glob("*/*.parquet")))
+    files = sorted(root.glob("*/stage_*/*.parquet"))
+    return tuple((str(p), p.stat().st_mtime) for p in files)
 
 
 @st.cache_data(show_spinner="Cargando predicciones…")
 def cached_predictions(
-    root: str, stamp: tuple
+    root: str, stage: str, stamp: tuple
 ) -> tuple[list[str], pl.DataFrame, pl.DataFrame]:
     path = Path(root)
-    models = data.discover_models(path)
-    return models, data.load_metrics(path, models), data.load_forecasts(path, models)
+    models = data.discover_models(path, stage)
+    return (
+        models,
+        data.load_metrics(path, models, stage),
+        data.load_forecasts(path, models, stage),
+    )
+
+
+@st.cache_data(show_spinner="Comparando etapas…")
+def cached_comparison(root: str, stamp: tuple) -> pl.DataFrame:
+    path = Path(root)
+    per_stage = [
+        data.load_metrics(path, data.discover_models(path, s), s) for s in ("A", "B")
+    ]
+    return data.stage_comparison(*per_stage)
 
 
 @st.cache_data
@@ -55,9 +70,9 @@ def _mtime(path: Path) -> float:
 
 
 def missing_predictions(models: tuple[str, ...] = MODEL_HINTS) -> None:
-    commands = "\n".join(data.run_command(m) for m in models)
+    commands = "\n".join(data.run_command(m, stage) for m in models)
     st.info(
-        "No hay predicciones de validación en "
+        f"No hay predicciones de validación de la etapa {stage} en "
         f"`{root}`. Genérelas primero (los baselines antes que el resto):"
     )
     st.code(commands, language="bash")
@@ -78,7 +93,21 @@ root = data.predictions_root()
 cfg = load_backtest_config()
 targets = load_config()["targets"]
 levels = cached_levels()
-models, metrics, forecasts = cached_predictions(str(root), _stamp(root))
+stage_label = st.sidebar.radio(
+    "Etapa de los modelos",
+    list(data.STAGE_LABELS.values()),
+    key="stage",
+    help="Cambia las predicciones de todas las pestañas de modelos.",
+)
+stage = next(k for k, v in data.STAGE_LABELS.items() if v == stage_label)
+st.sidebar.markdown(
+    "**Etapa A**: el modelo solo ve niveles del río (objetivo y estaciones aguas "
+    "arriba) y el calendario, desde 1974. **Etapa B**: además lluvia diaria NASA "
+    "POWER y el índice ONI, desde 1981 (primer año con lluvia). Ambas etapas se "
+    "evalúan en los mismos 24 cortes."
+)
+stamp = _stamp(root)
+models, metrics, forecasts = cached_predictions(str(root), stage, stamp)
 
 st.title("Orinoco Forecast")
 st.caption(
@@ -164,14 +193,15 @@ with tab_val:
         missing_predictions()
     else:
         st.markdown(
-            f"Modelos con predicciones: {', '.join(f'`{m}`' for m in models)}. "
+            f"{stage_label}. Modelos con predicciones: "
+            f"{', '.join(f'`{m}`' for m in models)}. "
             f"Validación cruzada con {cfg['n_windows']} cortes cada "
             f"{cfg['step_size']} días y horizonte de {cfg['horizon']} días, todo "
             f"antes de {cfg['test_start']}."
         )
         if data.BASELINES not in models:
             st.info("Sin baselines no se puede calcular rel_mae. Ejecute:")
-            st.code(data.run_command(data.BASELINES), language="bash")
+            st.code(data.run_command(data.BASELINES, stage), language="bash")
         st.subheader("Métricas por estación y modelo (h = 1..14)")
         st.markdown(
             "Error promedio sobre los 14 días del horizonte y todas las ventanas. "
@@ -234,6 +264,28 @@ with tab_val:
             width="stretch",
         )
 
+    comparison = cached_comparison(str(root), stamp)
+    if not comparison.is_empty():
+        st.subheader("Etapa A vs etapa B")
+        st.markdown(
+            "La etapa B agrega a cada modelo la lluvia diaria de NASA POWER en las "
+            "estaciones y el ONI (El Niño / La Niña), ambos rezagados igual que las "
+            "covariables aguas arriba. Se evalúa en los mismos 24 cortes, así que "
+            "la diferencia mide cuánto aportan esas variables. `delta_mae` = MAE B "
+            "− MAE A en metros (negativo: la etapa B mejora); `rel_mae` de cada "
+            "etapa se calcula contra el Naive de esa misma etapa. Las semillas se "
+            "promedian. Celdas vacías: esa etapa no se ha ejecutado."
+        )
+        st.dataframe(
+            comparison,
+            hide_index=True,
+            column_config={
+                c: st.column_config.NumberColumn(c, format="%.4f")
+                for c in comparison.columns
+                if c not in ("unique_id", "model")
+            },
+        )
+
 with tab_window:
     if not models:
         missing_predictions()
@@ -281,11 +333,14 @@ with tab_window:
         st.dataframe(window_mae, hide_index=True)
 
 with tab_imp:
-    path = root / "xgboost" / "feature_importance.parquet"
+    path = stage_dir(root, "xgboost", stage) / "feature_importance.parquet"
     importance = cached_optional(str(path), _mtime(path))
     if importance is None:
-        st.info("No hay importancia de variables de XGBoost. Genérela con:")
-        st.code(data.run_command("xgboost"), language="bash")
+        st.info(
+            f"No hay importancia de variables de XGBoost para la etapa {stage}. "
+            "Genérela con:"
+        )
+        st.code(data.run_command("xgboost", stage), language="bash")
     else:
         st.markdown(
             "Las 15 variables que más reducen el error en los árboles de XGBoost "

@@ -47,8 +47,8 @@ def _metrics(models: dict[str, float]) -> pl.DataFrame:
     return pl.DataFrame(rows)
 
 
-def _write(root: Path, name: str, models: dict[str, float]) -> None:
-    out = root / name
+def _write(root: Path, name: str, models: dict[str, float], stage: str = "A") -> None:
+    out = root / name / f"stage_{stage}"
     out.mkdir(parents=True)
     _cv(models).write_parquet(out / "cv.parquet")
     _metrics(models).write_parquet(out / "metrics.parquet")
@@ -63,9 +63,58 @@ def root(tmp_path: Path) -> Path:
     return tmp_path
 
 
+@pytest.fixture
+def two_stages(root: Path) -> Path:
+    _write(root, "baselines", {"Naive": 1.0, "SeasonalNaive": 2.0}, stage="B")
+    _write(root, "xgboost", {"XGBoost": 0.3}, stage="B")
+    return root
+
+
 def test_discover_models_skips_folders_without_predictions(root: Path) -> None:
     assert data.discover_models(root) == ["baselines", "tcn", "xgboost"]
+    assert data.discover_models(root, "B") == []
     assert data.discover_models(root / "missing") == []
+
+
+def test_discover_models_ignores_legacy_root_files(root: Path) -> None:
+    legacy = root / "lstm"
+    _cv({"LSTM": 0.1}).write_parquet(legacy / "cv.parquet")
+    _metrics({"LSTM": 0.1}).write_parquet(legacy / "metrics.parquet")
+    assert "lstm" not in data.discover_models(root, "A")
+    assert "lstm" not in data.discover_models(root, "B")
+
+
+def test_stages_are_read_separately(two_stages: Path) -> None:
+    assert data.discover_models(two_stages, "B") == ["baselines", "xgboost"]
+    metrics_b = data.load_metrics(two_stages, ["baselines", "xgboost"], "B")
+    row = metrics_b.filter(
+        (pl.col("model") == "XGBoost") & (pl.col("horizon") == "all")
+    ).row(0, named=True)
+    assert row["mae"] == pytest.approx(0.4)
+    assert row["rel_mae"] == pytest.approx(0.4 / 1.1)
+    preds = data.load_forecasts(two_stages, ["xgboost"], "B")
+    first = preds.sort("unique_id", "cutoff", "ds").row(0, named=True)
+    assert first["y_hat"] == pytest.approx(first["y"] + 0.3)
+
+
+def test_stage_comparison_pairs_models_and_averages_seeds(two_stages: Path) -> None:
+    a = data.load_metrics(two_stages, data.discover_models(two_stages, "A"), "A")
+    b = data.load_metrics(two_stages, data.discover_models(two_stages, "B"), "B")
+    table = data.stage_comparison(a, b)
+    assert {"unique_id", "model", "mae_A", "mae_B", "rel_mae_A", "rel_mae_B"} <= set(
+        table.columns
+    )
+    xgb = table.filter(
+        (pl.col("model") == "XGBoost") & (pl.col("unique_id") == "palua")
+    ).row(0, named=True)
+    assert xgb["mae_A"] == pytest.approx(0.6)
+    assert xgb["mae_B"] == pytest.approx(0.4)
+    assert xgb["delta_mae"] == pytest.approx(-0.2)
+    tcn = table.filter(
+        (pl.col("model") == "TCN") & (pl.col("unique_id") == "palua")
+    ).row(0, named=True)
+    assert tcn["mae_A"] == pytest.approx(0.5)  # Mean of the three seeds.
+    assert tcn["mae_B"] is None  # Stage B not run for TCN.
 
 
 def test_load_metrics_adds_rel_mae_and_family(root: Path) -> None:
@@ -175,7 +224,7 @@ def test_app_runs_against_repository_predictions(
 ) -> None:
     root = data.predictions_root()
     needed = {"baselines", "xgboost", "tcn"}
-    if not needed <= set(data.discover_models(root)):
+    if not needed <= set(data.discover_models(root, "A")):
         pytest.skip("Predicciones no generadas (data/predictions no se versiona).")
     at = _app(monkeypatch, root)
     assert not at.exception
@@ -185,6 +234,20 @@ def test_app_runs_against_repository_predictions(
     cutoff = at.selectbox(key="w_cutoff")
     cutoff.set_value(cutoff.options[0]).run()
     assert not at.exception
+
+
+def test_app_stage_selector_switches_predictions(
+    monkeypatch: pytest.MonkeyPatch, two_stages: Path
+) -> None:
+    at = _app(monkeypatch, two_stages)
+    assert not at.exception
+    stage = at.sidebar.radio(key="stage")
+    assert stage.value == data.STAGE_LABELS["A"]
+    assert "Etapa A vs etapa B" in " ".join(str(s.value) for s in at.subheader)
+    stage.set_value(data.STAGE_LABELS["B"]).run()
+    assert not at.exception
+    models = at.multiselect(key="h_models").options
+    assert "XGBoost" in models and "TCN_s1" not in models
 
 
 def test_app_runs_without_predictions(
