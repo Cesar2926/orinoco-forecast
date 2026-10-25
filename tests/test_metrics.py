@@ -7,7 +7,15 @@ import numpy as np
 import polars as pl
 import pytest
 
-from orinoco_forecast.evaluation.metrics import evaluate_cv, kge, mae, mase, nse, rmse
+from orinoco_forecast.evaluation.metrics import (
+    evaluate_cv,
+    kge,
+    mae,
+    mase,
+    nse,
+    relative_to_baseline,
+    rmse,
+)
 
 Y = [1.0, 2.0, 3.0, 4.0]
 
@@ -108,3 +116,43 @@ def test_evaluate_cv_naive_on_random_walk_has_mase_near_one() -> None:
     assert per_h.to_list() == pytest.approx([1.0] * horizon, abs=0.15)
     all_mase = out.filter(pl.col("horizon") == "all")["mase"].item()
     assert all_mase == pytest.approx(per_h.mean())
+
+
+def _metrics(
+    model: str, maes: dict[tuple[str, str], float], n: int = 4
+) -> pl.DataFrame:
+    rows = [
+        {"unique_id": uid, "model": model, "horizon": h, "n": n, "mae": v}
+        for (uid, h), v in maes.items()
+    ]
+    return pl.DataFrame(rows).with_columns(
+        *(pl.lit(0.0).alias(m) for m in ("rmse", "mase", "nse", "kge"))
+    )
+
+
+def test_relative_to_baseline_divides_by_naive_mae() -> None:
+    keys = {("a", "1"): 1.0, ("a", "all"): 2.0, ("b", "all"): 3.0}
+    model = _metrics("M", {k: v / 2 for k, v in keys.items()})
+    baseline = pl.concat(
+        [_metrics("Naive", keys), _metrics("SeasonalNaive", {k: 9.0 for k in keys})]
+    )
+    out = relative_to_baseline(model, baseline).sort("unique_id", "horizon")
+    assert out.height == 3
+    assert out["mae_naive"].to_list() == [1.0, 2.0, 3.0]
+    assert out["rel_mae"].to_list() == pytest.approx([0.5, 0.5, 0.5])
+    seasonal = relative_to_baseline(model, baseline, baseline_model="SeasonalNaive")
+    assert seasonal["mae_naive"].to_list() == [9.0, 9.0, 9.0]
+
+
+def test_relative_to_baseline_requires_baseline_rows() -> None:
+    model = _metrics("M", {("a", "all"): 1.0, ("b", "all"): 1.0})
+    with pytest.raises(ValueError, match="Naive"):
+        relative_to_baseline(model, _metrics("SeasonalNaive", {("a", "all"): 1.0}))
+    with pytest.raises(ValueError, match="b"):
+        relative_to_baseline(model, _metrics("Naive", {("a", "all"): 1.0}))
+
+
+def test_relative_to_baseline_rejects_different_windows() -> None:
+    model = _metrics("M", {("a", "all"): 1.0}, n=4)
+    with pytest.raises(ValueError, match="ventanas"):
+        relative_to_baseline(model, _metrics("Naive", {("a", "all"): 1.0}, n=6))

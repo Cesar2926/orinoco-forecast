@@ -145,3 +145,37 @@ def evaluate_cv(
         **{m: pl.Float64 for m in METRICS},
     }
     return pl.DataFrame(rows, schema=schema)
+
+
+def relative_to_baseline(
+    metrics: pl.DataFrame, baseline: pl.DataFrame, baseline_model: str = "Naive"
+) -> pl.DataFrame:
+    """Agrega ``mae_naive`` y ``rel_mae = mae / mae_naive`` a ``metrics``.
+
+    - Ambos marcos tienen el esquema de ``evaluate_cv``; se unen por
+      ``unique_id`` y ``horizon`` con las filas ``baseline_model`` de ``baseline``.
+      ``rel_mae < 1`` significa que el modelo supera a esa referencia.
+    - Las métricas no guardan los cortes, así que se asume que ambos marcos
+      vienen de ``run_cv`` con el mismo ``configs/backtest.yaml``. Como control,
+      ``n`` (filas puntuadas) debe coincidir; si no, ``ValueError``.
+    - ``ValueError`` si falta la referencia para algún ``unique_id``/``horizon``.
+    """
+    ref = baseline.filter(pl.col("model") == baseline_model).select(
+        "unique_id", "horizon", n_naive="n", mae_naive="mae"
+    )
+    if ref.is_empty():
+        raise ValueError(
+            f"No hay métricas de {baseline_model!r} en las referencias; "
+            "ejecute primero los baselines."
+        )
+    out = metrics.join(ref, on=["unique_id", "horizon"], how="left")
+    missing = out.filter(pl.col("mae_naive").is_null())
+    if not missing.is_empty():
+        keys = sorted(set(missing["unique_id"]))
+        raise ValueError(f"Falta {baseline_model!r} para unique_id {keys}.")
+    if (out["n"] != out["n_naive"]).any():
+        raise ValueError(
+            f"El modelo y {baseline_model!r} no se evaluaron en las mismas ventanas "
+            "(distinto número de filas puntuadas)."
+        )
+    return out.drop("n_naive").with_columns(rel_mae=pl.col("mae") / pl.col("mae_naive"))
