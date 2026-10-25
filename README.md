@@ -595,16 +595,19 @@ código entre notebooks.
 |---|---|
 | Estructura de carpetas, configuración y entorno con uv | Disponible |
 | Auditoría de datos crudos (`data/raw/README.md`) | Disponible |
-| Carga y validación de datos (`data/loading.py`) | Pendiente |
+| Carga y validación de datos (`data/loading.py`) | Disponible |
 | Alineación de NASA POWER y ONI (`data/exogenous.py`) | Disponible |
 | Formato long y variables predictoras (`features/`) | Disponible (rezagos aguas arriba, lluvia, ONI y calendario) |
-| Métricas MAE, RMSE, MASE, NSE, KGE | Pendiente |
-| Baselines y AutoARIMA (statsforecast) | Pendiente |
-| XGBoost (mlforecast) | Pendiente |
-| LSTM, TCN, TFT (neuralforecast) | Pendiente |
+| Extracción a formato largo con columna `quality` | Disponible |
+| Métricas MAE, RMSE, MASE (por horizonte y estacional), NSE, KGE, MAE relativo, sMAPE, MAPE | Disponible |
+| Baselines Naive y SeasonalNaive | Disponible |
+| ARIMA / ARIMAX (statsmodels) | Implementado; comparación en las 24 ventanas pendiente |
+| XGBoost (mlforecast) | Disponible: ajustado y evaluado en etapas A y B |
+| TCN (neuralforecast) | Disponible: ajustado y evaluado en etapas A y B |
+| LSTM, TFT (neuralforecast) | Pendiente |
 | TimesFM 3.0 | Pendiente |
-| Extracción a formato largo con columna `quality` | Pendiente |
-| Comparación en validación y selección del modelo final | Pendiente |
+| Dashboard Streamlit | Disponible |
+| Comparación en validación y selección del modelo final | En curso: XGBoost y TCN evaluados ([detalle](docs/modelos_arboles_cnn.md)) |
 | Evaluación del modelo elegido en el test final y reporte | Pendiente |
 | Ensamble de modelos | Fuera del alcance; experimento opcional |
 
