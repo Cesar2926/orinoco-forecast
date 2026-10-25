@@ -78,6 +78,7 @@ def test_discover_models_skips_folders_without_predictions(root: Path) -> None:
 
 def test_discover_models_ignores_legacy_root_files(root: Path) -> None:
     legacy = root / "lstm"
+    legacy.mkdir(exist_ok=True)  # Self-contained: do not rely on the fixture.
     _cv({"LSTM": 0.1}).write_parquet(legacy / "cv.parquet")
     _metrics({"LSTM": 0.1}).write_parquet(legacy / "metrics.parquet")
     assert "lstm" not in data.discover_models(root, "A")
