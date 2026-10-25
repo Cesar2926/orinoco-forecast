@@ -312,6 +312,7 @@ modelos.
 | MAE | Error absoluto medio, en metros. | Más bajo es mejor. |
 | RMSE | Raíz del error cuadrático medio, en metros. | Penaliza más los errores grandes (crecidas mal predichas). |
 | MASE | MAE de cada día del horizonte `h` escalado por el error de la persistencia a `h` días en entrenamiento. | Menor que 1 significa que el modelo supera a la persistencia. |
+| MAE relativo (`rel_mae`) | MAE del modelo dividido por el MAE de la persistencia (Naive) en las mismas ventanas de validación. | Menor que 1 significa que el modelo supera a la persistencia en ese período; es el requisito mínimo de selección. |
 | NSE | Eficiencia de Nash-Sutcliffe, estándar en hidrología. | 1 es perfecto; 0 equivale a predecir la media; negativo es peor que la media. |
 | KGE | Eficiencia de Kling-Gupta: combina correlación, sesgo y variabilidad. | 1 es perfecto. |
 
@@ -324,10 +325,14 @@ esconde dónde falla cada modelo.
 El criterio se fija antes de ver los resultados. Si se define después, siempre se encuentra
 uno que favorezca al modelo preferido.
 
-1. **Requisito mínimo:** el modelo debe superar a la persistencia (MASE < 1) en **cada
-   estación por separado**, sobre el bloque de validación. El MASE no tiene unidades, así
-   que este control impide que Ciudad Bolívar, con niveles mayores, domine la elección. Si
-   ningún modelo lo cumple, ese es el resultado principal del proyecto.
+1. **Requisito mínimo:** el modelo debe superar a la persistencia en **cada estación por
+   separado**, sobre el bloque de validación: MAE relativo a la persistencia (MAE del
+   modelo / MAE de Naive en las mismas ventanas de validación) < 1. Al ser un cociente sin
+   unidades, este control impide que Ciudad Bolívar, con niveles mayores, domine la
+   elección. No se usa MASE < 1 porque su escala viene del historial de entrenamiento y
+   no del período evaluado: la propia persistencia obtiene MASE = 1,16 en Palúa en
+   2021–2022, así que el umbral dependería de cuán difícil fue la validación respecto
+   al historial. Si ningún modelo lo cumple, ese es el resultado principal del proyecto.
 2. **Métrica principal:** MAE promedio de `h = 1` a `14`, promediado entre Ciudad Bolívar y
    Palúa, sobre las ventanas de validación.
 3. **Desempate**, si dos modelos quedan a pocos centímetros, en este orden:
