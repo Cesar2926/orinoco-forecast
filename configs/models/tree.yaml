@@ -16,19 +16,19 @@ target_differences: [1]
 # Historical covariates (upstream stations, and rain/ONI in stage B) are shifted
 # by these days before reaching mlforecast. The minimum must be >= horizon so
 # every value used at a forecast date is already observed at the cutoff.
-covariate_lags: [14, 21, 28, 56]
+covariate_lags: [14, 21, 28, 56] # ajustado con Optuna: 20 pruebas, ventanas de ajuste 2020, objetivo rel_mae medio (sin cambio)
 
 xgb_params:
-  # Low learning rate with many trees: smoother fit on noisy daily series.
-  n_estimators: 800
-  learning_rate: 0.05
+  # Search space and trials: evaluation/tuning.py, reports/tuning/xgboost_trials.csv.
+  n_estimators: 900 # ajustado con Optuna: 20 pruebas, ventanas de ajuste 2020, objetivo rel_mae medio
+  learning_rate: 0.1201 # ajustado con Optuna: 20 pruebas, ventanas de ajuste 2020, objetivo rel_mae medio
   # Interaction depth (XGBoost default).
-  max_depth: 6
+  max_depth: 6 # ajustado con Optuna: 20 pruebas, ventanas de ajuste 2020, objetivo rel_mae medio (sin cambio)
   # Row/column subsampling and regularisation reduce overfitting.
-  subsample: 0.8
-  colsample_bytree: 0.8
-  min_child_weight: 5
-  reg_lambda: 1.0
+  subsample: 0.8839 # ajustado con Optuna: 20 pruebas, ventanas de ajuste 2020, objetivo rel_mae medio
+  colsample_bytree: 0.5034 # ajustado con Optuna: 20 pruebas, ventanas de ajuste 2020, objetivo rel_mae medio
+  min_child_weight: 1.379 # ajustado con Optuna: 20 pruebas, ventanas de ajuste 2020, objetivo rel_mae medio
+  reg_lambda: 0.2729 # ajustado con Optuna: 20 pruebas, ventanas de ajuste 2020, objetivo rel_mae medio
   # Histogram split finding: fast on ~37k rows; fixed seed for reproducibility.
   tree_method: hist
   random_state: 42

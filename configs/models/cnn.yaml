@@ -6,19 +6,22 @@
 # Target: "level" models y directly; "difference" models y_t - y_{t-1}, adds the
 # current level as historical covariate level_y and rebuilds levels from the
 # level at the cutoff (persistence becomes the zero prediction).
-target_transform: level
-input_size: 56 # Days of history per window (~1 month lead of the floodplain x2).
-kernel_size: 2
-dilations: [1, 2, 4, 8, 16]
-encoder_hidden_size: 64 # Filters per causal convolution layer.
+target_transform: difference # ajustado con Optuna: 20 pruebas, ventanas de ajuste 2020, objetivo rel_mae medio
+input_size: 112 # ajustado con Optuna: 20 pruebas, ventanas de ajuste 2020, objetivo rel_mae medio
+# (~1 month lead of the floodplain x4; 28/56/112 searched).
+kernel_size: 2 # ajustado con Optuna: 20 pruebas, ventanas de ajuste 2020, objetivo rel_mae medio (sin cambio)
+dilations: [1, 2, 4, 8, 16] # ajustado con Optuna: 20 pruebas, ventanas de ajuste 2020, objetivo rel_mae medio (sin cambio)
+encoder_hidden_size: 32 # ajustado con Optuna: 20 pruebas, ventanas de ajuste 2020, objetivo rel_mae medio
+# (filters per causal convolution layer).
 decoder_hidden_size: 64
 decoder_layers: 2
 
 # Optimisation. MAE loss matches the selection metric; the robust scaler (median,
 # IQR) is fitted per window on its input part, so floods do not distort it.
 loss: MAE
-learning_rate: 0.001
-max_steps: 1000 # Overridable with run_model.py --max-steps for smoke runs.
+learning_rate: 0.002656 # ajustado con Optuna: 20 pruebas, ventanas de ajuste 2020, objetivo rel_mae medio
+max_steps: 1000 # ajustado con Optuna: 20 pruebas, ventanas de ajuste 2020, objetivo rel_mae medio (sin cambio)
+# Overridable with run_model.py --max-steps for smoke runs.
 batch_size: 32 # Series per batch.
 windows_batch_size: 128 # Training windows sampled per batch.
 scaler_type: robust
