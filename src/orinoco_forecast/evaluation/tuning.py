@@ -158,11 +158,13 @@ def run_study(
 
     study = optuna.create_study(
         storage=storage,
-        sampler=optuna.samplers.TPESampler(seed=SAMPLER_SEED),
         study_name=study_name or model,
         direction="minimize",
         load_if_exists=True,
     )
+    # Offset the seed by the trials already stored: re-seeding a resumed study
+    # with the same value replays the first random draws (duplicate trials).
+    study.sampler = optuna.samplers.TPESampler(seed=SAMPLER_SEED + len(study.trials))
     complete = optuna.trial.TrialState.COMPLETE
     done = len(study.get_trials(deepcopy=False, states=(complete,)))
     if done < n_trials:

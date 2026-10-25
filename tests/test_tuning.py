@@ -177,3 +177,19 @@ def test_run_study_records_attrs_and_resumes(tmp_path: Path) -> None:
     table = trials_table(study)
     assert {"number", "value", "state", "rel_mae_a", "rel_mae_b"} <= set(table.columns)
     assert "params_max_depth" in table.columns
+
+
+def _tiny_lr(trial: optuna.Trial, base: dict) -> dict:
+    xgb = {**base["xgb_params"], "n_estimators": 5, "n_jobs": 1}
+    xgb["learning_rate"] = trial.suggest_float("learning_rate", 0.01, 0.3, log=True)
+    return {**base, "xgb_params": xgb}
+
+
+def test_resumed_study_does_not_repeat_first_trial(tmp_path: Path) -> None:
+    cfg = load_backtest_config()
+    frame = _synthetic(date(2015, 1, 1), date(2022, 12, 31))
+    storage = f"sqlite:///{(tmp_path / 'r.db').as_posix()}"
+    run_study("xgboost", frame, cfg, 1, storage, suggest=_tiny_lr)
+    study = run_study("xgboost", frame, cfg, 2, storage, suggest=_tiny_lr)
+    first, second = (t.params["learning_rate"] for t in study.trials)
+    assert first != second
