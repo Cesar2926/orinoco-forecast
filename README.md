@@ -380,6 +380,8 @@ proyecto:
 
 ```text
 Proyecto-IA-Orinoco/
+├── app/
+│   └── dashboard.py             # Tablero Streamlit de solo lectura
 ├── configs/                     # Toda la configuración del proyecto
 │   ├── data.yaml                # Fuentes de datos: rutas, columnas, formato
 │   ├── backtest.yaml            # Protocolo compartido: horizon, ventanas, test_start
@@ -482,9 +484,35 @@ uv sync
 | `uv run pytest` | `make test` | Ejecuta las pruebas. |
 | `uv run ruff check .` | `make lint` | Revisa estilo y errores comunes. |
 | `uv run ruff format .` | `make format` | Formatea el código. |
+| `uv run streamlit run app/dashboard.py` | `make dashboard` | Abre el tablero de datos y modelos. |
 
 En Windows `make` no viene instalado; se pueden usar los comandos `uv` directamente o
 instalarlo con `choco install make` o `scoop install make`.
+
+### Dashboard
+
+Tablero de Streamlit para inspeccionar los datos y el comportamiento de los modelos. Es de
+solo lectura: no entrena modelos ni toca el bloque de test final; lee los niveles de
+`data/raw/` y las predicciones de validación de `data/predictions/<modelo>/`. Esas
+predicciones no se versionan, así que primero hay que generarlas (los baselines antes que
+el resto, porque `rel_mae` se calcula contra Naive):
+
+```bash
+uv run python scripts/run_model.py baselines
+uv run python scripts/run_model.py xgboost
+uv run python scripts/run_model.py tcn
+uv run streamlit run app/dashboard.py   # o: make dashboard
+```
+
+| Pestaña | Qué muestra |
+|---|---|
+| Datos | Nivel diario por estación y rango de fechas, con los días no `observed` coloreados por etiqueta de calidad y un conteo de etiquetas por estación. Si existe `data/processed/orinoco_exogenous.parquet`, también lluvia diaria y ONI. |
+| Validación de modelos | Métricas (h = 1..14) por estación y modelo, con `rel_mae < 1` marcado; media ± desviación entre semillas de las redes; tabla del criterio de selección y MAE por día de horizonte frente a Naive. |
+| Pronóstico por ventana | Para una estación y un corte de validación: 60 días observados antes del corte, los 14 posteriores y el pronóstico de cada modelo. La media de semillas se muestra solo como referencia visual. |
+| Importancia de variables | Las 15 variables con más ganancia en XGBoost, con la explicación de sus nombres. |
+
+Cada gráfico lleva encima una nota sobre qué representa y cómo leerlo. Si falta alguna
+predicción, el tablero muestra el comando exacto para generarla.
 
 ---
 
