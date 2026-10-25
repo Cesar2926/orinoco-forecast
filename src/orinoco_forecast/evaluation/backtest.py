@@ -46,6 +46,24 @@ def cutoffs(frame: pl.DataFrame, cfg: dict[str, Any]) -> list[date]:
     return [last - timedelta(days=step * (n - 1 - i)) for i in range(n)]
 
 
+def tuning_config(cfg: dict[str, Any]) -> dict[str, Any]:
+    """``cfg`` con ``n_windows`` y ``step_size`` del bloque ``tuning``.
+
+    Horizonte y política de reentrenamiento son los mismos del protocolo.
+    """
+    return {**cfg, **cfg["tuning"]}
+
+
+def tuning_frame(frame: pl.DataFrame, cfg: dict[str, Any]) -> pl.DataFrame:
+    """Filas de desarrollo hasta el primer corte de validación (inclusive).
+
+    Las ventanas de ajuste terminan en ese corte: los hiperparámetros se eligen
+    sin ver las ventanas de validación que comparan modelos ni el test final.
+    """
+    dev = development_frame(frame, cfg)
+    return dev.filter(pl.col("ds") <= cutoffs(dev, cfg)[0])
+
+
 def final_test_setup(
     frame: pl.DataFrame, cfg: dict[str, Any]
 ) -> tuple[pl.DataFrame, dict[str, Any]]:
@@ -75,6 +93,27 @@ def _normalise(raw: Any, models: list[str]) -> pl.DataFrame:
     return out.select(*CV_KEYS, *models).sort("unique_id", "cutoff", "ds")
 
 
+def predict_cv(
+    name: str, runner: ForecastRunner, data: pl.DataFrame, run_cfg: dict[str, Any]
+) -> pl.DataFrame:
+    """Validación cruzada de ``runner`` sobre ``data`` sin escribir archivos.
+
+    Verifica antes que no haya imputaciones cerca de los cortes
+    (``assert_no_imputation_near_cutoffs``) y después que el runner haya usado
+    exactamente los cortes esperados.
+    """
+    expected = cutoffs(data, run_cfg)
+    assert_no_imputation_near_cutoffs(data, expected, run_cfg["horizon"])
+    cv = _normalise(runner.cross_validation(data, run_cfg), runner.model_columns)
+    got = sorted(cv["cutoff"].unique().to_list())
+    if got != expected:
+        raise ValueError(
+            f"{name}: el runner usó cortes distintos a los del protocolo "
+            f"({len(got)} vs {len(expected)} esperados)."
+        )
+    return cv
+
+
 def run_cv(
     name: str,
     runner: ForecastRunner,
@@ -102,16 +141,7 @@ def run_cv(
     else:
         data, run_cfg = development_frame(frame, cfg), cfg
         train = data
-    expected = cutoffs(data, run_cfg)
-    assert_no_imputation_near_cutoffs(data, expected, run_cfg["horizon"])
-
-    cv = _normalise(runner.cross_validation(data, run_cfg), runner.model_columns)
-    got = sorted(cv["cutoff"].unique().to_list())
-    if got != expected:
-        raise ValueError(
-            f"{name}: el runner usó cortes distintos a los del protocolo "
-            f"({len(got)} vs {len(expected)} esperados)."
-        )
+    cv = predict_cv(name, runner, data, run_cfg)
     metrics = evaluate_cv(cv, runner.model_columns, train)
 
     root = Path(output_root) if output_root else repo_root() / "data" / "predictions"
