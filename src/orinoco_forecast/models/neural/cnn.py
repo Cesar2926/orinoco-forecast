@@ -22,6 +22,7 @@ KEYS = ("unique_id", "ds", "y")
 # Fourier terms from features.dataset.fourier_terms: deterministic, known ahead.
 FUTURE_PREFIXES = ("sin_", "cos_")
 MODEL = "TCN"
+TRANSFORMS = ("level", "difference")
 
 
 def load_cnn_config(path: str | Path | None = None) -> dict[str, Any]:
@@ -48,6 +49,57 @@ def split_covariates(frame: pl.DataFrame) -> tuple[list[str], list[str]]:
     return futr, [c for c in covs if c not in futr]
 
 
+def prepare_frame(
+    frame: pl.DataFrame, transform: str = "level"
+) -> tuple[pl.DataFrame, list[str], list[str]]:
+    """Tabla para neuralforecast y listas de exógenas futuras/históricas.
+
+    - ``"level"``: ``y`` es el nivel.
+    - ``"difference"``: ``y`` pasa a ser ``y_t - y_{t-1}`` por ``unique_id``
+      (se descarta la primera fila de cada serie) y el nivel actual entra como
+      histórica ``level_y``. Igual que las demás históricas, TCN solo la lee
+      hasta el corte de cada ventana (``hist_exog`` se corta a ``input_size``,
+      ver ``TCNRunner``).
+    """
+    if transform not in TRANSFORMS:
+        raise ValueError(f"target_transform desconocido: {transform!r} {TRANSFORMS}")
+    futr, hist = split_covariates(frame)
+    data = frame.select(*KEYS, *futr, *hist).sort("unique_id", "ds")
+    if transform == "level":
+        return data, futr, hist
+    data = data.with_columns(
+        level_y=pl.col("y"), y=pl.col("y").diff().over("unique_id")
+    ).drop_nulls("y")
+    return data, futr, [*hist, "level_y"]
+
+
+def reconstruct_levels(
+    cv: pl.DataFrame, levels: pl.DataFrame, columns: Sequence[str]
+) -> pl.DataFrame:
+    """Convierte pronósticos de diferencias en niveles.
+
+    Cada columna en ``columns`` pasa a ser ``y(cutoff) + suma acumulada`` de las
+    diferencias pronosticadas en los pasos ``1..h`` de su ventana; ``y(cutoff)``
+    es el nivel observado el día del corte (conocido en el corte). ``y`` se
+    reemplaza por el nivel observado en ``ds``. ``levels`` trae
+    ``unique_id, ds, y``.
+    """
+    at_cutoff = levels.select("unique_id", cutoff="ds", _y_cut="y")
+    observed = levels.select("unique_id", "ds", _y_obs="y")
+    window = ("unique_id", "cutoff")
+    return (
+        cv.join(at_cutoff, on=window, how="left")
+        .join(observed, on=["unique_id", "ds"], how="left")
+        .sort("unique_id", "cutoff", "ds")
+        .with_columns(
+            (pl.col("_y_cut") + pl.col(c).cum_sum().over(window)).alias(c)
+            for c in columns
+        )
+        .with_columns(y=pl.col("_y_obs"))
+        .select("unique_id", "ds", "cutoff", "y", *columns)
+    )
+
+
 class TCNRunner:
     """TCN global (ambas estaciones), un modelo por semilla en las mismas ventanas.
 
@@ -64,6 +116,11 @@ class TCNRunner:
       en el primer corte) solo sirven para la parada temprana. Luego predice las
       ventanas con paso ``step_size``. Las ventanas de entrenamiento se muestrean
       al azar, pero cada una conserva su orden temporal.
+    - ``target_transform: difference`` (``cnn.yaml``): entrena sobre el cambio
+      diario y reconstruye el nivel con ``reconstruct_levels``. Motivo: en nivel
+      escalado, reproducir "mañana ≈ hoy" es difícil y el TCN en nivel pierde
+      contra la persistencia en h=1; en diferencias la persistencia es la
+      predicción cero, como ya hace XGBoost con ``Differences([1])``.
     """
 
     name = "tcn"
@@ -116,16 +173,24 @@ class TCNRunner:
     def cross_validation(
         self, frame: pl.DataFrame, cfg: dict[str, Any]
     ) -> pl.DataFrame:
-        futr, hist = split_covariates(frame)
+        transform = self.params.get("target_transform", "level")
+        data, futr, hist = prepare_frame(frame, transform)
         nf = NeuralForecast(
             models=self._models(cfg["horizon"], futr, hist),
             # Polars input needs a polars offset ("1d"), not pandas "D".
             freq="1d",
         )
-        return nf.cross_validation(
-            df=frame.select(*KEYS, *futr, *hist),
+        cv = nf.cross_validation(
+            df=data,
             n_windows=cfg["n_windows"],
             step_size=cfg["step_size"],
             val_size=self.params["val_size"],
             refit=cfg["refit"],
         )
+        if transform == "level":
+            return cv
+        if not isinstance(cv, pl.DataFrame):
+            cv = pl.from_pandas(cv.reset_index())
+        cv = cv.with_columns(pl.col("ds", "cutoff").cast(pl.Date))
+        levels = frame.select(*KEYS).with_columns(pl.col("ds").cast(pl.Date))
+        return reconstruct_levels(cv, levels, self.model_columns)

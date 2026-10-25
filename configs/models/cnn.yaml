@@ -3,6 +3,10 @@
 
 # Architecture. Receptive field = 1 + (kernel_size - 1) * sum(dilations) = 32 days;
 # the runner rejects input_size below it (part of the net would see no data).
+# Target: "level" models y directly; "difference" models y_t - y_{t-1}, adds the
+# current level as historical covariate level_y and rebuilds levels from the
+# level at the cutoff (persistence becomes the zero prediction).
+target_transform: level
 input_size: 56 # Days of history per window (~1 month lead of the floodplain x2).
 kernel_size: 2
 dilations: [1, 2, 4, 8, 16]

@@ -10,7 +10,9 @@ from orinoco_forecast.evaluation.backtest import load_backtest_config, run_cv
 from orinoco_forecast.models.neural.cnn import (
     TCNRunner,
     load_cnn_config,
+    prepare_frame,
     receptive_field,
+    reconstruct_levels,
     split_covariates,
 )
 from orinoco_forecast.models.registry import get_runner
@@ -103,3 +105,54 @@ def test_historical_covariates_after_last_cutoff_do_not_change_forecasts() -> No
     base = TCNRunner(_tiny_params()).cross_validation(frame, cfg)
     other = TCNRunner(_tiny_params()).cross_validation(shocked, cfg)
     assert base["TCN_s1"].to_list() == pytest.approx(other["TCN_s1"].to_list())
+
+
+def test_reconstruct_levels_adds_cumulative_differences_to_cutoff_level() -> None:
+    cutoff = date(2021, 1, 10)
+    days = [cutoff + timedelta(days=k) for k in range(1, 4)]
+    diffs = pl.DataFrame(
+        {
+            "unique_id": ["a"] * 3,
+            "ds": days,
+            "cutoff": [cutoff] * 3,
+            "y": [0.0] * 3,
+            "TCN_s1": [0.5, -0.2, 0.1],
+        }
+    )
+    # Level at the cutoff is 10; later observed levels differ on purpose.
+    levels = pl.DataFrame(
+        {
+            "unique_id": ["a"] * 4,
+            "ds": [cutoff, *days],
+            "y": [10.0, 99.0, 98.0, 97.0],
+        }
+    )
+    out = reconstruct_levels(diffs, levels, ["TCN_s1"])
+    assert out["TCN_s1"].to_list() == pytest.approx([10.5, 10.3, 10.4])
+    assert out["y"].to_list() == [99.0, 98.0, 97.0]
+
+
+def test_level_y_is_historical_only_with_difference_transform() -> None:
+    frame = _synthetic(date(2020, 1, 1), date(2020, 1, 31))
+    data, futr, hist = prepare_frame(frame, "level")
+    assert "level_y" not in hist and "level_y" not in data.columns
+    data, futr, hist = prepare_frame(frame, "difference")
+    assert hist[-1] == "level_y" and futr == ["sin_1", "cos_1"]
+    first = frame.filter(pl.col("unique_id") == "a").sort("ds")
+    a = data.filter(pl.col("unique_id") == "a")
+    assert a.height == first.height - 1
+    assert a["y"][0] == pytest.approx(first["y"][1] - first["y"][0])
+    assert a["level_y"][0] == pytest.approx(first["y"][1])
+
+
+def test_difference_cross_validation_returns_levels() -> None:
+    cfg = {**load_backtest_config(), "n_windows": 2}
+    frame = _synthetic(date(2021, 1, 1), date(2022, 12, 31))
+    params = {**_tiny_params(), "target_transform": "difference"}
+    cv = TCNRunner(params).cross_validation(frame, cfg)
+    assert cv.columns == ["unique_id", "ds", "cutoff", "y", "TCN_s1"]
+    truth = cv.join(frame, on=["unique_id", "ds"], suffix="_obs")
+    assert truth["y"].to_list() == pytest.approx(truth["y_obs"].to_list())
+    assert cv["TCN_s1"].null_count() == 0
+    # Reconstructed levels stay near the series range (8..14), not near 0.
+    assert cv["TCN_s1"].min() > 5
