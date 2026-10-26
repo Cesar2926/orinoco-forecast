@@ -293,14 +293,18 @@ def _calendar_frame(dates: pl.Series, terms: int) -> pl.DataFrame:
 def add_river_features(
     levels: pl.DataFrame,
     config: RiverFeatureConfig | None = None,
+    *,
+    include_rain: bool = True,
+    include_oni: bool = True,
 ) -> pl.DataFrame:
     """Append leakage-safe station, rain, ONI and calendar features.
 
     Station levels are written as ``<station>_lag_<n>``, rain as
     ``rain_<station>_lag_<n>``, ONI as ``oni_lag_<n>`` and the annual cycle as
-    ``sin_doy``/``cos_doy`` plus optional harmonics. The input frame is not
-    modified; the returned frame preserves its columns and sorts by
-    ``unique_id, ds``.
+    ``sin_doy``/``cos_doy`` plus optional harmonics. ``include_rain`` and
+    ``include_oni`` permiten construir features solo con niveles cuando las
+    exógenas aún no están disponibles. The input frame is not modified; the
+    returned frame preserves its columns and sorts by ``unique_id, ds``.
     """
     config = config or RiverFeatureConfig()
     _validate_levels(levels)
@@ -331,7 +335,7 @@ def add_river_features(
             )
     for station in config.river_order:
         column = f"rain_{station}"
-        if config.rain_lags and column in levels.columns:
+        if include_rain and config.rain_lags and column in levels.columns:
             feature_frames.append(
                 _lag_frame(
                     _external_frame(levels, [column]),
@@ -340,7 +344,7 @@ def add_river_features(
                     f"{column}_lag_",
                 )
             )
-    if config.oni_lags:
+    if include_oni and config.oni_lags:
         if "oni" not in levels.columns:
             raise ValueError(
                 "La configuración pide rezagos de ONI, pero falta la columna 'oni'."
