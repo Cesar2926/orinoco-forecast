@@ -7,6 +7,9 @@ the same row, precedence is::
 
 ``missing`` wins because there is no value to judge; ``source_conflict`` beats
 the single-series heuristics because it is evidence from an independent source.
+The 1930-2025 Ciudad Bolívar workbook that served as reference was removed, so
+the pipeline passes no ``reference`` and ``source_conflict`` stays in
+``QUALITY_LABELS`` only for schema compatibility.
 """
 
 import warnings

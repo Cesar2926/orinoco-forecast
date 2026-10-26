@@ -1,4 +1,4 @@
-"""Shared fixtures: each raw workbook is read once per test session."""
+"""Shared fixtures: the raw workbook is read once per test session."""
 
 import warnings
 from dataclasses import dataclass
@@ -6,7 +6,7 @@ from dataclasses import dataclass
 import polars as pl
 import pytest
 
-from orinoco_forecast.data.loading import load_historical, load_primary
+from orinoco_forecast.data.loading import load_primary
 from orinoco_forecast.features.dataset import build_model_frame, load_levels
 
 
@@ -29,25 +29,15 @@ def primary_loaded() -> Loaded:
 
 
 @pytest.fixture(scope="session")
-def historical_loaded() -> Loaded:
-    return _load_recording(load_historical)
-
-
-@pytest.fixture(scope="session")
 def primary(primary_loaded: Loaded) -> pl.DataFrame:
     return primary_loaded.frame
 
 
 @pytest.fixture(scope="session")
-def historical(historical_loaded: Loaded) -> pl.DataFrame:
-    return historical_loaded.frame
-
-
-@pytest.fixture(scope="session")
-def levels(primary: pl.DataFrame, historical: pl.DataFrame) -> pl.DataFrame:
+def levels(primary: pl.DataFrame) -> pl.DataFrame:
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        return load_levels(primary=primary, historical=historical)
+        return load_levels(primary=primary)
 
 
 def _model_frame(stage: str, levels: pl.DataFrame) -> pl.DataFrame:

@@ -10,6 +10,7 @@ from orinoco_forecast.data.loading import DataQualityWarning
 from orinoco_forecast.data.quality import QUALITY_DTYPE
 from orinoco_forecast.features.dataset import (
     assert_no_imputation_near_cutoffs,
+    build_model_frame,
     clean_series,
     fourier_terms,
 )
@@ -100,6 +101,10 @@ def test_leakage_guard_passes_far_from_cutoff() -> None:
 FOURIER = ["sin_1", "sin_2", "sin_3", "cos_1", "cos_2", "cos_3"]
 
 
+PERIOD_START, PERIOD_END = date(2009, 1, 1), date(2024, 12, 31)
+N_DAYS = 5844  # 2009-01-01..2024-12-31.
+
+
 def test_model_frame_stage_a(model_frame_a: pl.DataFrame) -> None:
     frame = model_frame_a
     assert frame.columns == [
@@ -113,11 +118,23 @@ def test_model_frame_stage_a(model_frame_a: pl.DataFrame) -> None:
     ]
     assert sorted(frame["unique_id"].unique()) == ["ciudad_bolivar", "palua"]
     assert frame.null_count().sum_horizontal().item() == 0
-    assert frame["ds"].max() == date(2025, 2, 24)
-    assert frame["ds"].min() == date(1974, 1, 1)
+    assert frame["ds"].min() == PERIOD_START
+    assert frame["ds"].max() == PERIOD_END
+    assert frame.height == 2 * N_DAYS
     assert frame.select(pl.col("ds").is_sorted().over("unique_id")).to_series().all()
-    # The 2020 flat run at Ciudad Bolivar (19 days) is imputed.
-    assert frame.filter(pl.col("unique_id") == "ciudad_bolivar")["imputed"].sum() >= 19
+
+
+def test_model_frame_imputed_rows(model_frame_a: pl.DataFrame) -> None:
+    imputed = model_frame_a.filter(pl.col("imputed"))
+    days = set(imputed["ds"].to_list())
+    # Ciudad Bolivar flat run (19 days), Ayacucho flat run (12 days, covariate)
+    # and Palua's three missing Feb 29 values.
+    cb_run = {date(2020, 3, 24) + timedelta(days=i) for i in range(19)}
+    ay_run = {date(2019, 3, 7) + timedelta(days=i) for i in range(12)}
+    feb29 = {date(2012, 2, 29), date(2016, 2, 29), date(2020, 2, 29)}
+    assert days == cb_run | ay_run | feb29
+    palua_feb29 = imputed.filter(pl.col("unique_id") == "palua")["ds"].to_list()
+    assert feb29 <= set(palua_feb29)
 
 
 def test_model_frame_stage_b(model_frame_b: pl.DataFrame) -> None:
@@ -125,5 +142,56 @@ def test_model_frame_stage_b(model_frame_b: pl.DataFrame) -> None:
     rain = ["rain_ayacucho", "rain_caicara", "rain_ciudad_bolivar", "rain_palua"]
     assert set(rain + ["oni", *FOURIER]).issubset(frame.columns)
     assert frame["imputed"].dtype == pl.Boolean and frame.columns[-1] == "imputed"
-    assert frame["ds"].min() == date(1981, 1, 1)
+    assert frame["ds"].min() == PERIOD_START
+    assert frame["ds"].max() == PERIOD_END
     assert frame.null_count().sum_horizontal().item() == 0
+
+
+def _labelled(values: dict[str, list[float | None]]) -> pl.DataFrame:
+    frames = [
+        pl.DataFrame(
+            {
+                "unique_id": uid,
+                "ds": [START + timedelta(days=i) for i in range(len(ys))],
+                "y": ys,
+            },
+            schema_overrides={"y": pl.Float64},
+        )
+        for uid, ys in values.items()
+    ]
+    return pl.concat(frames).with_columns(
+        source=pl.lit("primary"),
+        quality=pl.when(pl.col("y").is_null())
+        .then(pl.lit("missing"))
+        .otherwise(pl.lit("observed"))
+        .cast(QUALITY_DTYPE),
+    )
+
+
+def _config(**model_frame: object) -> dict:
+    settings = {
+        "upstream": ["u"],
+        "max_gap_days": 2,
+        "fourier_k": 1,
+        "fourier_period": 365.25,
+    }
+    return {"targets": ["t"], "model_frame": {**settings, **model_frame}}
+
+
+def test_model_frame_restricted_to_configured_period() -> None:
+    levels = _labelled({"t": [float(i) for i in range(10)], "u": [1.0] * 10})
+    cfg = _config(start="2020-01-03", end="2020-01-07")
+    frame = build_model_frame("A", config=cfg, levels=levels)
+    assert frame["ds"].min() == date(2020, 1, 3)
+    assert frame["ds"].max() == date(2020, 1, 7)
+    assert frame["y"].to_list() == [2.0, 3.0, 4.0, 5.0, 6.0]
+
+
+def test_model_frame_fails_listing_long_gaps() -> None:
+    t = [1.0, None, None, None, 5.0, 6.0]
+    levels = _labelled({"t": t, "u": [1.0] * 6})
+    with (
+        pytest.warns(DataQualityWarning),
+        pytest.raises(ValueError, match=r"t: 2020-01-02\.\.2020-01-04 \(3 días\)"),
+    ):
+        build_model_frame("A", config=_config(), levels=levels)

@@ -17,7 +17,6 @@ from orinoco_forecast.data.exogenous import add_exogenous, load_exogenous_config
 from orinoco_forecast.data.loading import (
     DataQualityWarning,
     load_config,
-    load_historical,
     load_primary,
 )
 from orinoco_forecast.data.quality import label_quality
@@ -29,26 +28,17 @@ EPOCH = date(1970, 1, 1)
 def load_levels(
     config: dict[str, Any] | None = None,
     primary: pl.DataFrame | None = None,
-    historical: pl.DataFrame | None = None,
 ) -> pl.DataFrame:
     """Tabla larga etiquetada (``unique_id, ds, y, source, quality``) en memoria.
 
-    Misma composición que ``scripts/build_dataset.py``: primaria más la extensión
-    histórica de Ciudad Bolívar, con conflictos medidos solo donde ambas fuentes
-    se solapan. Se construye en memoria para no depender de un parquet viejo.
+    Lee la fuente primaria completa (``DATOS RIO ORINOCO.xlsx``); el recorte al
+    periodo del modelo lo hace ``build_model_frame``. Sin fuente de referencia,
+    ``label_quality`` no emite ``source_conflict``.
     """
     primary = load_primary(config) if primary is None else primary
-    historical = load_historical(config) if historical is None else historical
-    primary = primary.with_columns(source=pl.lit("primary"))
-    primary_end = primary["ds"].max()
-    extension = historical.filter(
-        pl.col("unique_id").is_in(primary["unique_id"].unique().implode())
-        & (pl.col("ds") > primary_end)
-    ).with_columns(source=pl.lit("historical"))
-    levels = pl.concat([primary, extension]).sort("unique_id", "ds")
-    reference = historical.filter(pl.col("ds") <= primary_end)
     thresholds = (config or load_config())["quality"]
-    return label_quality(levels, reference=reference, thresholds=thresholds)
+    levels = primary.with_columns(source=pl.lit("primary")).sort("unique_id", "ds")
+    return label_quality(levels, thresholds=thresholds)
 
 
 def clean_series(df: pl.DataFrame, max_gap_days: int) -> pl.DataFrame:
@@ -123,6 +113,19 @@ def _assert_complete(frame: pl.DataFrame, label: str) -> None:
         raise ValueError(f"{label}: quedan valores nulos por columna: {nulls}")
 
 
+def _null_runs(frame: pl.DataFrame) -> list[str]:
+    """Rachas nulas de ``y`` por serie, como ``"<id>: <inicio>..<fin> (<n> días)"``."""
+    runs = (
+        frame.sort("unique_id", "ds")
+        .with_columns(_run=pl.col("y").is_null().rle_id().over("unique_id"))
+        .filter(pl.col("y").is_null())
+        .group_by("unique_id", "_run")
+        .agg(start=pl.col("ds").min(), end=pl.col("ds").max(), n=pl.len())
+        .sort("unique_id", "start")
+    )
+    return [f"{u}: {a}..{b} ({n} días)" for u, _, a, b, n in runs.iter_rows()]
+
+
 def build_model_frame(
     stage: str = "A",
     config: dict[str, Any] | None = None,
@@ -131,13 +134,15 @@ def build_model_frame(
     """Tabla para modelos: targets largos + estaciones aguas arriba + Fourier.
 
     - ``stage="A"``: ``unique_id, ds, y, <upstream>, sin_*, cos_*, imputed``.
-      Se limita al rango común de las cuatro estaciones (la primaria termina el
-      2025-02-24); la extensión 2025 solo de Ciudad Bolívar queda fuera.
+      Se limita a ``model_frame.start..end`` (2009-01-01..2024-12-31, periodo
+      válido según el profesor) dentro del rango común de las estaciones, antes
+      de limpiar: la interpolación no usa datos fuera del periodo.
     - ``stage="B"``: además lluvia NASA POWER (``rain_*``) y ``oni`` vía
       ``add_exogenous``, desde la primera fecha con lluvia en todas las
-      estaciones (1981).
+      estaciones (1981, anterior al periodo).
     - ``imputed`` es ``True`` si el target o alguna covariable de ese día fue
-      interpolado. Levanta ``ValueError`` si queda algún nulo.
+      interpolado. Levanta ``ValueError`` listando los huecos que la limpieza no
+      cubre (más de ``max_gap_days`` o en los extremos) y si queda algún nulo.
     """
     if stage not in {"A", "B"}:
         raise ValueError(f"Etapa desconocida: {stage!r} (use 'A' o 'B').")
@@ -150,9 +155,19 @@ def build_model_frame(
         start=pl.col("ds").min(), end=pl.col("ds").max()
     )
     start, end = spans["start"].max(), spans["end"].min()
+    if "start" in settings:
+        start = max(start, date.fromisoformat(str(settings["start"])))
+    if "end" in settings:
+        end = min(end, date.fromisoformat(str(settings["end"])))
     cleaned = clean_series(
         stations.filter(pl.col("ds").is_between(start, end)), settings["max_gap_days"]
     )
+    if gaps := _null_runs(cleaned):
+        raise ValueError(
+            f"build_model_frame(stage={stage!r}): huecos sin interpolar (más de "
+            f"{settings['max_gap_days']} días o en los extremos; la serie no se "
+            f"inventa): {'; '.join(gaps)}"
+        )
 
     target = cleaned.filter(pl.col("unique_id").is_in(targets))
     covs = cleaned.filter(pl.col("unique_id").is_in(upstream))

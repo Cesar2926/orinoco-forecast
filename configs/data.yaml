@@ -6,65 +6,20 @@ targets: [ciudad_bolivar, palua]
 quality:
   flat_min_days: 10 # Identical consecutive values for at least this many days.
   jump_max_m_per_day: 1.0 # Absolute day-over-day change above this is suspect.
-  source_conflict_m: 0.3 # Primary vs historical Ciudad Bolivar disagreement.
+  source_conflict_m: 0.3 # Only used when a reference source is passed (none now).
 
+# Levels are read with TimeSeriesDataset.extract_levels (data/datasets.py): the
+# first column is the date and the next four are the stations in river order.
+# The workbook ends 2025-03-31, but rows after 2025-02-24 are empty.
+# The 1930-2025 Ciudad Bolivar workbook was removed from data/raw/, so there is
+# no reference source and label_quality never emits source_conflict.
 sources:
   - name: orinoco_stations
-    path: "data/raw/Niveles Orinoco.xlsx"
-    sheet: "Niveles PC CO CB P"
-    date_column: fecha
-    target_column: ciudad_bolivar
+    path: "data/raw/DATOS RIO ORINOCO.xlsx"
+    sheet: "Entrenar"
     freq: D
-    covariates: [ayacucho, caicara, palua]
     format: excel
     role: primary
-
-  # This file's .xls suffix is retained, but its payload is CSV, not a workbook.
-  # It is an exact duplicate of orinoco_stations in the audited worktree.
-  - name: orinoco_stations_csv_export
-    path: "data/raw/dataset_imputado_simpleml.csv.xls"
-    sheet: null
-    date_column: fecha
-    target_column: ciudad_bolivar
-    freq: D
-    covariates: [ayacucho, caicara, palua]
-    format: csv
-    date_format: "%Y/%m/%d"
-    duplicate_of: orinoco_stations
-    role: duplicate # Not loaded by the pipeline.
-
-  # NIVELES stores years in columns and month/day in rows. The loader reshapes
-  # only these value columns in memory, never rewrites the workbook.
-  # Extends Ciudad Bolivar to 2025-12-31 and serves as conflict reference.
-  - name: ciudad_bolivar_historical
-    path: "data/raw/Niveles Del Orinoco Est. Ciudad Bolivar 1930-2025.xlsx"
-    sheet: NIVELES
-    date_column: fecha
-    target_column: nivel_m
-    unique_id: ciudad_bolivar # Station name used in the long table.
-    freq: D
-    format: excel
-    layout: wide_years
-    role: historical
-    date_parts:
-      month_column: MES
-      day_column: "DIA DEL MES"
-      year_column_pattern: "^(19|20)\\d{2}$"
-      first_year: 1930
-      last_year: 2025
-      month_mapping:
-        ENE: 1
-        FEB: 2
-        MAR: 3
-        ABR: 4
-        MAY: 5
-        JUN: 6
-        JUL: 7
-        AGO: 8
-        SEP: 9
-        OCT: 10
-        NOV: 11
-        DIC: 12
 
 exogenous:
   nasa_power:
@@ -81,6 +36,9 @@ exogenous:
 # Model-ready frame built by orinoco_forecast.features.dataset.build_model_frame.
 model_frame:
   upstream: [ayacucho, caicara] # Historical covariates (past values only).
+  # Period accepted by the professor; data outside it is not used.
+  start: "2009-01-01"
+  end: "2024-12-31"
   max_gap_days: 31 # Longer null runs stay null (series is not invented).
   fourier_k: 3 # sin/cos pairs for the annual cycle.
   fourier_period: 365.25 # Days.
