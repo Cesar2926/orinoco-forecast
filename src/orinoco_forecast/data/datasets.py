@@ -5,9 +5,13 @@ El Parquet escrito es la tabla larga ``unique_id, ds, y`` con lluvia NASA POWER
 diario, lluvia y ONI configurados en ``configs/data.yaml`` (ver
 :mod:`orinoco_forecast.features.lags`). Las covariables se leen de
 ``data/external/`` según la sección ``exogenous`` de la configuración.
+
+:class:`ParquetDataset` es la interfaz de solo lectura de ese archivo: filtra
+por estación, fechas y columnas antes de materializar el ``DataFrame``.
 """
 
 import warnings
+from collections.abc import Iterable, Sequence
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -31,6 +35,7 @@ DEFAULT_SOURCE = repo_root() / "data" / "raw" / "DATOS RIO ORINOCO.xlsx"
 DEFAULT_SHEET = "Entrenar"
 DEFAULT_OUTPUT = repo_root() / "data" / "interim" / "orinoco_dataset.parquet"
 STATIONS = ("ayacucho", "caicara", "ciudad_bolivar", "palua")
+LEVELS_COLUMNS = ("unique_id", "ds", "y")
 
 
 class TimeSeriesDataset:
@@ -179,3 +184,214 @@ class TimeSeriesDataset:
         self.output_path.parent.mkdir(parents=True, exist_ok=True)
         frame.write_parquet(self.output_path)
         return self.output_path
+
+    def interface(self) -> "ParquetDataset":
+        """Interfaz de solo lectura del Parquet escrito por esta instancia."""
+        return ParquetDataset(self.output_path)
+
+
+class ParquetDataset:
+    """Interfaz de solo lectura sobre el Parquet del dataset largo.
+
+    Abre el archivo con :func:`polars.scan_parquet`, así que filtrar por
+    estación, rango de fechas o subconjunto de columnas no materializa la tabla
+    completa (*projection* y *predicate pushdown*). El archivo lo escribe
+    :meth:`TimeSeriesDataset.write_parquet`.
+
+    El orden de filas del archivo se conserva; ``write_parquet`` ya ordena por
+    ``unique_id, ds``. Las rutas relativas se resuelven contra la raíz del
+    repositorio.
+    """
+
+    REQUIRED_SCHEMA = {
+        "unique_id": pl.String,
+        "ds": pl.Date,
+        "y": pl.Float64,
+    }
+
+    def __init__(self, path: str | Path = DEFAULT_OUTPUT) -> None:
+        candidate = Path(path)
+        self.path = candidate if candidate.is_absolute() else repo_root() / candidate
+        if not self.path.is_file():
+            raise FileNotFoundError(
+                f"No se encontró el Parquet del dataset: {self.path}. "
+                "Genéralo con TimeSeriesDataset.write_parquet()."
+            )
+        self._schema = self._read_schema()
+
+    def _read_schema(self) -> dict[str, pl.DataType]:
+        """Lee solo el footer del Parquet y valida las columnas mínimas."""
+        schema = pl.scan_parquet(self.path).collect_schema()
+        missing = set(self.REQUIRED_SCHEMA).difference(schema)
+        if missing:
+            raise ValueError(
+                f"{self.path.name}: faltan columnas obligatorias {sorted(missing)}."
+            )
+        wrong = {
+            column: (schema[column], expected)
+            for column, expected in self.REQUIRED_SCHEMA.items()
+            if schema[column] != expected
+        }
+        if wrong:
+            raise ValueError(
+                f"{self.path.name}: esquema inválido (columna -> (recibido, "
+                f"esperado)): {wrong}."
+            )
+        return {name: dtype for name, dtype in schema.items()}
+
+    def schema(self) -> dict[str, pl.DataType]:
+        """Esquema completo del archivo, sin leer los datos."""
+        return dict(self._schema)
+
+    def columns(self) -> tuple[str, ...]:
+        """Nombres de columna en el orden del archivo."""
+        return tuple(self._schema)
+
+    def n_rows(self) -> int:
+        """Número de filas del Parquet."""
+        return pl.scan_parquet(self.path).select(pl.len()).collect().item()
+
+    def unique_ids(self) -> list[str]:
+        """``unique_id`` disponibles, ordenados alfabéticamente."""
+        return (
+            pl.scan_parquet(self.path)
+            .select(pl.col("unique_id").unique().sort())
+            .collect()["unique_id"]
+            .to_list()
+        )
+
+    def date_range(self) -> tuple[date, date]:
+        """Primera y última fecha del dataset."""
+        bounds = (
+            pl.scan_parquet(self.path)
+            .select(
+                pl.col("ds").min().alias("start"),
+                pl.col("ds").max().alias("end"),
+            )
+            .collect()
+            .row(0)
+        )
+        return bounds
+
+    def feature_columns(self) -> tuple[str, ...]:
+        """Columnas predictoras: todo menos ``unique_id``, ``ds`` y ``y``."""
+        return tuple(column for column in self._schema if column not in LEVELS_COLUMNS)
+
+    def lag_columns(self) -> tuple[str, ...]:
+        """Columnas de rezago (contienen ``_lag_``)."""
+        return tuple(column for column in self._schema if "_lag_" in column)
+
+    def exogenous_columns(self) -> tuple[str, ...]:
+        """Lluvia y ONI crudos, sin rezago: ``rain_<estacion>`` y ``oni``."""
+        return tuple(
+            column
+            for column in self._schema
+            if (column.startswith("rain_") and "_lag_" not in column) or column == "oni"
+        )
+
+    def null_counts(self, columns: Sequence[str] | None = None) -> dict[str, int]:
+        """Nulos por columna (todas si ``columns`` es ``None``)."""
+        selection = self._select_columns(columns)
+        counts = (
+            pl.scan_parquet(self.path)
+            .select(*(pl.col(column).null_count() for column in selection))
+            .collect()
+            .row(0)
+        )
+        return {
+            column: int(count) for column, count in zip(selection, counts, strict=True)
+        }
+
+    def summary(self) -> dict[str, Any]:
+        """Resumen del archivo: ruta, filas, columnas, estaciones y fechas."""
+        start, end = self.date_range()
+        return {
+            "path": str(self.path),
+            "rows": self.n_rows(),
+            "columns": len(self._schema),
+            "unique_ids": self.unique_ids(),
+            "start": start,
+            "end": end,
+        }
+
+    def lazy(
+        self,
+        *,
+        columns: Sequence[str] | None = None,
+        unique_ids: str | Iterable[str] | None = None,
+        start: date | None = None,
+        end: date | None = None,
+    ) -> pl.LazyFrame:
+        """Plan perezoso con filtros de columna, estación y rango de fechas.
+
+        ``start``/``end`` son inclusivos y deben ser ``datetime.date`` (sin
+        hora). Un ``unique_id`` o una columna inexistente levantan
+        ``ValueError`` en vez de devolver una tabla vacía o silenciosa.
+        """
+        selection = self._select_columns(columns)
+        start = self._as_date(start, "start")
+        end = self._as_date(end, "end")
+        if start is not None and end is not None and start > end:
+            raise ValueError(f"start ({start}) no puede ser posterior a end ({end}).")
+        frame = pl.scan_parquet(self.path)
+        stations = self._select_ids(unique_ids)
+        if stations is not None:
+            frame = frame.filter(pl.col("unique_id").is_in(stations))
+        if start is not None:
+            frame = frame.filter(pl.col("ds") >= start)
+        if end is not None:
+            frame = frame.filter(pl.col("ds") <= end)
+        return frame.select(*selection)
+
+    def read(
+        self,
+        *,
+        columns: Sequence[str] | None = None,
+        unique_ids: str | Iterable[str] | None = None,
+        start: date | None = None,
+        end: date | None = None,
+    ) -> pl.DataFrame:
+        """Materializa :meth:`lazy` en un ``pl.DataFrame``."""
+        return self.lazy(
+            columns=columns,
+            unique_ids=unique_ids,
+            start=start,
+            end=end,
+        ).collect()
+
+    def _select_columns(self, columns: Sequence[str] | None) -> tuple[str, ...]:
+        if columns is None:
+            return tuple(self._schema)
+        selection = tuple(dict.fromkeys(columns))
+        if not selection:
+            raise ValueError("columns no puede estar vacío.")
+        missing = [column for column in selection if column not in self._schema]
+        if missing:
+            raise ValueError(
+                f"{self.path.name}: columnas inexistentes {missing}. "
+                f"Disponibles: {list(self._schema)}."
+            )
+        return selection
+
+    def _select_ids(self, unique_ids: str | Iterable[str] | None) -> list[str] | None:
+        if unique_ids is None:
+            return None
+        values = [unique_ids] if isinstance(unique_ids, str) else list(unique_ids)
+        if not values:
+            raise ValueError("unique_ids no puede estar vacío.")
+        available = self.unique_ids()
+        missing = sorted(set(values).difference(available))
+        if missing:
+            raise ValueError(
+                f"{self.path.name}: unique_ids inexistentes {missing}. "
+                f"Disponibles: {available}."
+            )
+        return values
+
+    @staticmethod
+    def _as_date(value: date | None, label: str) -> date | None:
+        if value is not None and type(value) is not date:
+            raise ValueError(
+                f"{label} debe ser datetime.date (sin hora), no {type(value).__name__}."
+            )
+        return value

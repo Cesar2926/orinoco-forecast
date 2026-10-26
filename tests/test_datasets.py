@@ -1,11 +1,16 @@
 """Persistencia Parquet del dataset largo con features de niveles."""
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
+from pathlib import Path
 
 import polars as pl
 import pytest
 
-from orinoco_forecast.data.datasets import STATIONS, TimeSeriesDataset
+from orinoco_forecast.data.datasets import (
+    STATIONS,
+    ParquetDataset,
+    TimeSeriesDataset,
+)
 from orinoco_forecast.data.exogenous import load_nasa_power, load_oni
 from orinoco_forecast.data.loading import load_config
 from orinoco_forecast.features.lags import RiverFeatureConfig, add_river_features
@@ -172,3 +177,134 @@ def test_base_can_disable_external_features() -> None:
 
     assert "ayacucho_lag_14" in output.columns
     assert "oni_lag_0" not in output.columns
+
+
+def _interface_frame(days: int = 6) -> pl.DataFrame:
+    """Tabla larga mínima con covariables crudas y dos rezagos."""
+    levels = (
+        _wide(days)
+        .unpivot(index="ds", variable_name="unique_id", value_name="y")
+        .sort("unique_id", "ds")
+    )
+    return levels.with_columns(
+        pl.lit(0.5).alias("rain_ayacucho"),
+        pl.lit(0.1).alias("oni"),
+    ).with_columns(
+        pl.col("y").shift(1).over("unique_id").alias("ayacucho_lag_1"),
+        pl.col("oni").shift(1).alias("oni_lag_1"),
+    )
+
+
+def _write_interface_frame(tmp_path: Path) -> tuple[Path, pl.DataFrame]:
+    path = tmp_path / "dataset.parquet"
+    frame = _interface_frame()
+    frame.write_parquet(path)
+    return path, frame
+
+
+def test_parquet_interface_reads_and_filters(tmp_path) -> None:
+    path, frame = _write_interface_frame(tmp_path)
+    reader = ParquetDataset(path)
+
+    assert reader.path == path
+    assert reader.columns() == tuple(frame.columns)
+    assert reader.schema() == dict(frame.schema)
+    assert reader.n_rows() == frame.height
+    assert reader.unique_ids() == sorted(STATIONS)
+    assert reader.date_range() == (frame["ds"].min(), frame["ds"].max())
+    assert reader.read().equals(frame)
+    assert reader.read(columns=("unique_id", "ds", "y")).columns == [
+        "unique_id",
+        "ds",
+        "y",
+    ]
+
+    palua = reader.read(unique_ids="palua")
+    assert palua["unique_id"].unique().to_list() == ["palua"]
+    assert palua.height == frame.height // len(STATIONS)
+
+    window = reader.read(
+        unique_ids=["palua", "caicara"],
+        start=date(2020, 1, 2),
+        end=date(2020, 1, 4),
+    )
+    assert window["unique_id"].unique().sort().to_list() == ["caicara", "palua"]
+    assert window["ds"].min() == date(2020, 1, 2)
+    assert window["ds"].max() == date(2020, 1, 4)
+    assert window.height == 2 * 3
+
+    lazy = reader.lazy(columns=("unique_id", "y"), unique_ids="ayacucho")
+    assert lazy.collect().columns == ["unique_id", "y"]
+
+
+def test_parquet_interface_introspects_columns(tmp_path) -> None:
+    path, frame = _write_interface_frame(tmp_path)
+    reader = ParquetDataset(path)
+
+    assert set(reader.feature_columns()) == set(frame.columns) - {
+        "unique_id",
+        "ds",
+        "y",
+    }
+    assert reader.lag_columns() == ("ayacucho_lag_1", "oni_lag_1")
+    assert set(reader.exogenous_columns()) == {"rain_ayacucho", "oni"}
+    assert reader.null_counts(("y", "ayacucho_lag_1")) == {
+        "y": 0,
+        "ayacucho_lag_1": len(STATIONS),
+    }
+
+    summary = reader.summary()
+    assert summary["rows"] == frame.height
+    assert summary["columns"] == frame.width
+    assert summary["unique_ids"] == sorted(STATIONS)
+    assert (summary["start"], summary["end"]) == reader.date_range()
+
+
+def test_parquet_interface_rejects_invalid_arguments(tmp_path) -> None:
+    path, _ = _write_interface_frame(tmp_path)
+    reader = ParquetDataset(path)
+
+    with pytest.raises(ValueError, match="columnas inexistentes"):
+        reader.read(columns=("y", "no_existe"))
+    with pytest.raises(ValueError, match="columns no puede"):
+        reader.read(columns=())
+    with pytest.raises(ValueError, match="unique_ids inexistentes"):
+        reader.read(unique_ids="no_existe")
+    with pytest.raises(ValueError, match="start debe ser datetime.date"):
+        reader.read(start=datetime(2020, 1, 2))
+    with pytest.raises(ValueError, match="posterior a end"):
+        reader.read(start=date(2020, 1, 5), end=date(2020, 1, 2))
+
+
+def test_parquet_interface_requires_an_existing_dataset(tmp_path) -> None:
+    with pytest.raises(FileNotFoundError, match="write_parquet"):
+        ParquetDataset(tmp_path / "missing.parquet")
+
+
+def test_parquet_interface_validates_required_schema(tmp_path) -> None:
+    path = tmp_path / "bad.parquet"
+    pl.DataFrame({"unique_id": ["a"], "ds": ["2020-01-01"], "y": [1.0]}).write_parquet(
+        path
+    )
+
+    with pytest.raises(ValueError, match="esquema inválido"):
+        ParquetDataset(path)
+
+    path = tmp_path / "missing_y.parquet"
+    pl.DataFrame({"unique_id": ["a"], "ds": [date(2020, 1, 1)]}).write_parquet(path)
+
+    with pytest.raises(ValueError, match="faltan columnas obligatorias"):
+        ParquetDataset(path)
+
+
+def test_dataset_interface_exposes_written_parquet(tmp_path, monkeypatch) -> None:
+    output = tmp_path / "levels.parquet"
+    dataset = TimeSeriesDataset(output)
+    _patch_wide(monkeypatch, dataset, _wide())
+
+    dataset.write_parquet()
+
+    reader = dataset.interface()
+    assert isinstance(reader, ParquetDataset)
+    assert reader.path == output
+    assert reader.unique_ids() == sorted(STATIONS)
