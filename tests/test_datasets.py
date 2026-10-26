@@ -6,7 +6,12 @@ import polars as pl
 import pytest
 
 from orinoco_forecast.data.datasets import STATIONS, TimeSeriesDataset
+from orinoco_forecast.data.exogenous import load_nasa_power, load_oni
+from orinoco_forecast.data.loading import load_config
 from orinoco_forecast.features.lags import RiverFeatureConfig, add_river_features
+
+RAIN_LAGS = (14, 21, 28)
+ONI_LAGS = (0, 30, 60)
 
 
 def _wide(days: int = 35) -> pl.DataFrame:
@@ -44,7 +49,7 @@ def test_write_parquet_writes_long_frame_with_lag_features(
     assert frame.height == wide.height * len(STATIONS)
     assert frame["unique_id"].n_unique() == len(STATIONS)
     assert frame.select(pl.struct("unique_id", "ds").is_duplicated().sum()).item() == 0
-    assert set(frame.columns) - {"unique_id", "ds", "y"} == {
+    assert {
         "ayacucho_lag_7",
         "ayacucho_lag_14",
         "caicara_lag_4",
@@ -52,7 +57,7 @@ def test_write_parquet_writes_long_frame_with_lag_features(
         "d_ayacucho_lag_3",
         "d_caicara_lag_3",
         "d_ciudad_bolivar_lag_1",
-    }
+    } <= set(frame.columns)
     assert "sin_doy" not in frame.columns
     assert "cos_doy" not in frame.columns
     assert frame.equals(frame.sort("unique_id", "ds"))
@@ -63,6 +68,62 @@ def test_write_parquet_writes_long_frame_with_lag_features(
     ).item(0, "ayacucho_lag_14")
     source = wide.filter(pl.col("ds") == day - timedelta(days=14))["ayacucho"].item()
     assert value == pytest.approx(source)
+
+
+def test_write_parquet_adds_rain_and_oni_from_external(tmp_path, monkeypatch) -> None:
+    output = tmp_path / "levels.parquet"
+    dataset = TimeSeriesDataset(output)
+    _patch_wide(monkeypatch, dataset, _wide())
+
+    dataset.write_parquet()
+
+    frame = pl.read_parquet(output)
+    rain_columns = [f"rain_{station}" for station in STATIONS]
+    assert set(rain_columns) | {"oni"} <= set(frame.columns)
+    assert {
+        f"{column}_lag_{lag}" for column in rain_columns for lag in RAIN_LAGS
+    } <= set(frame.columns)
+    assert {f"oni_lag_{lag}" for lag in ONI_LAGS} <= set(frame.columns)
+
+    settings = load_config()["exogenous"]
+    nasa = load_nasa_power(
+        settings["nasa_power"]["files"], settings["nasa_power"]["variable"]
+    )
+    oni = load_oni(
+        settings["noaa_oni"]["path"],
+        settings["noaa_oni"]["publication_lag_months"],
+    )
+    day = date(2020, 1, 31)
+    row = frame.filter(
+        (pl.col("unique_id") == "ciudad_bolivar") & (pl.col("ds") == day)
+    ).row(0, named=True)
+    expected_rain = nasa.filter(pl.col("ds") == day)
+    expected_oni = oni.filter(pl.col("ds") == day)["oni"].item()
+    for station in STATIONS:
+        assert row[f"rain_{station}"] == pytest.approx(
+            expected_rain[f"rain_{station}"].item()
+        )
+        lagged = nasa.filter(pl.col("ds") == day - timedelta(days=14))
+        assert row[f"rain_{station}_lag_14"] == pytest.approx(
+            lagged[f"rain_{station}"].item()
+        )
+    assert row["oni"] == pytest.approx(expected_oni)
+    assert row["oni_lag_30"] == pytest.approx(
+        oni.filter(pl.col("ds") == day - timedelta(days=30))["oni"].item()
+    )
+
+
+def test_write_parquet_can_skip_external_sources(tmp_path, monkeypatch) -> None:
+    output = tmp_path / "levels.parquet"
+    dataset = TimeSeriesDataset(output)
+    _patch_wide(monkeypatch, dataset, _wide())
+
+    dataset.write_parquet(include_exogenous=False)
+
+    columns = set(pl.read_parquet(output).columns)
+    assert "oni" not in columns
+    assert not any(column.startswith("rain_") for column in columns)
+    assert "ayacucho_lag_14" in columns
 
 
 def test_write_parquet_accepts_output_override(tmp_path, monkeypatch) -> None:

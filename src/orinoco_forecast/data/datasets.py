@@ -1,16 +1,20 @@
 """Dataset diario de niveles del río extraído desde el libro de Excel.
 
-El Parquet escrito es la tabla larga ``unique_id, ds, y`` con los rezagos de
-nivel y de cambio diario configurados en ``configs/data.yaml`` (ver
-:mod:`orinoco_forecast.features.lags`).
+El Parquet escrito es la tabla larga ``unique_id, ds, y`` con lluvia NASA POWER
+(``rain_<estacion>``), ONI de NOAA (``oni``) y los rezagos de nivel, cambio
+diario, lluvia y ONI configurados en ``configs/data.yaml`` (ver
+:mod:`orinoco_forecast.features.lags`). Las covariables se leen de
+``data/external/`` según la sección ``exogenous`` de la configuración.
 """
 
 import warnings
 from datetime import date
 from pathlib import Path
+from typing import Any
 
 import polars as pl
 
+from orinoco_forecast.data.exogenous import add_exogenous, load_exogenous_config
 from orinoco_forecast.data.loading import (
     DataQualityWarning,
     load_config,
@@ -124,27 +128,52 @@ class TimeSeriesDataset:
             .sort("unique_id", "ds")
         )
 
+    def extract_exogenous(
+        self,
+        config: dict[str, Any] | None = None,
+    ) -> tuple[pl.DataFrame, pl.DataFrame]:
+        """Lee lluvia NASA POWER y ONI desde ``data/external/``.
+
+        Las rutas no se hardcodean: salen de la sección ``exogenous`` de
+        ``configs/data.yaml``. Devuelve la lluvia diaria por estación
+        (``ds, rain_<estacion>``) y el ONI diario (``ds, oni``).
+        """
+        return load_exogenous_config(config or load_config())
+
     def write_parquet(
         self,
         output_path: str | Path | None = None,
         *,
         feature_config: RiverFeatureConfig | None = None,
+        include_exogenous: bool = True,
     ) -> Path:
-        """Escribe la tabla larga con los rezagos configurados en ``features``.
+        """Escribe la tabla larga con lluvia, ONI y los rezagos configurados.
 
-        Las columnas ``<estacion>_lag_<n>`` (nivel) y ``d_<estacion>_lag_<n>``
-        (cambio diario) salen de ``configs/data.yaml`` salvo que se pase
+        Las columnas ``rain_<estacion>`` y ``oni`` se alinean por fecha desde
+        ``data/external/`` (NASA POWER y NOAA, ver ``exogenous`` en
+        ``configs/data.yaml``) y se conservan sin imputar: las fechas fuera de
+        la cobertura de la fuente (la lluvia empieza en 1981) quedan nulas y se
+        reportan con ``DataQualityWarning``. Con ``include_exogenous=False`` se
+        escribe solo el río.
+
+        Las columnas ``<estacion>_lag_<n>`` (nivel), ``d_<estacion>_lag_<n>``
+        (cambio diario), ``rain_<estacion>_lag_<n>`` y ``oni_lag_<n>`` salen de
+        ``features`` en ``configs/data.yaml`` salvo que se pase
         ``feature_config``. El calendario ``sin_doy``/``cos_doy`` queda apagado
-        con ``calendar_terms: 0``. Lluvia y ONI se agregan solo si el Excel las
-        trae; hoy el libro solo contiene niveles.
+        con ``calendar_terms: 0``.
         """
         if output_path is not None:
             self.output_path = Path(output_path)
-        config = feature_config or load_feature_config(load_config())
+        settings = load_config()
+        config = feature_config or load_feature_config(settings)
         levels = self.extract_levels()
+        if include_exogenous:
+            nasa, oni = self.extract_exogenous(settings)
+            levels = add_exogenous(levels, nasa, oni)
         frame = add_river_features(
             levels,
             config,
+            include_rain=any(column.startswith("rain_") for column in levels.columns),
             include_oni="oni" in levels.columns,
         )
         self.output_path.parent.mkdir(parents=True, exist_ok=True)
