@@ -85,14 +85,22 @@ model_frame:
   fourier_k: 3 # sin/cos pairs for the annual cycle.
   fourier_period: 365.25 # Days.
 
-# Leakage-safe features built by scripts/build_exogenous_dataset.py.
+# Leakage-safe features written by TimeSeriesDataset.write_parquet.
 # A feature dated t only reads a source dated t - lag. ARIMAX consumes only
 # lags >= min_exog_lag, so every future exog value is observed at the cutoff.
 features:
   river_order: [ayacucho, caicara, ciudad_bolivar, palua]
   min_exog_lag: 14
-  upstream_lags: [14, 21, 28]
-  target_lags: [1, 2, 3, 7, 14, 21, 28]
+  # <station>_lag_<n>: level at t - n. Only these stations get lag columns.
+  station_lags:
+    ayacucho: [7, 14]
+    caicara: [4]
+    ciudad_bolivar: [1]
+  # d_<station>_lag_<n>: day-over-day change at t - n.
+  diff_lags:
+    ayacucho: [3]
+    caicara: [3]
+    ciudad_bolivar: [1]
   rain_lags: [14, 21, 28]
   oni_lags: [0, 30, 60]
-  calendar_terms: 1
+  calendar_terms: 0 # 0 = no sin_doy/cos_doy columns.

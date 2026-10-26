@@ -7,6 +7,8 @@ import pytest
 
 from orinoco_forecast.data.loading import DataQualityWarning
 from orinoco_forecast.features.lags import (
+    DEFAULT_DIFF_LAGS,
+    DEFAULT_STATION_LAGS,
     RIVER_ORDER,
     RiverFeatureConfig,
     add_river_features,
@@ -53,6 +55,16 @@ def _value(frame: pl.DataFrame, station: str, day: date, column: str) -> float:
     return rows.item(0, column)
 
 
+def _rich_features(days: int = 60) -> pl.DataFrame:
+    """Features con rezagos propios y aguas arriba para probar la selección."""
+    config = RiverFeatureConfig(
+        station_lags={station: (1, 14, 21) for station in RIVER_ORDER},
+        diff_lags={},
+        calendar_terms=1,
+    )
+    return add_river_features(_levels(days=days), config)
+
+
 def test_river_order_upstream_mapping() -> None:
     assert upstream_of("ayacucho") == ()
     assert upstream_of("caicara") == ("ayacucho",)
@@ -69,21 +81,65 @@ def test_features_are_lagged_by_calendar_days() -> None:
     assert _value(featured, "ciudad_bolivar", day, "ayacucho_lag_14") == (
         pytest.approx(26.0)
     )
-    assert _value(featured, "ciudad_bolivar", day, "caicara_lag_21") == (
-        pytest.approx(29.0)
+    assert _value(featured, "ciudad_bolivar", day, "ayacucho_lag_7") == (
+        pytest.approx(33.0)
     )
-    assert _value(featured, "palua", day, "ciudad_bolivar_lag_14") == (
-        pytest.approx(46.0)
+    assert _value(featured, "palua", day, "caicara_lag_4") == pytest.approx(46.0)
+    assert _value(featured, "palua", day, "ciudad_bolivar_lag_1") == pytest.approx(59.0)
+    assert _value(featured, "ciudad_bolivar", day, "d_ayacucho_lag_3") == (
+        pytest.approx(1.0)
     )
-    assert _value(featured, "palua", day, "ayacucho_lag_14") == (pytest.approx(26.0))
+    assert _value(featured, "ciudad_bolivar", day, "d_caicara_lag_3") == (
+        pytest.approx(1.0)
+    )
+    assert _value(featured, "ciudad_bolivar", day, "d_ciudad_bolivar_lag_1") == (
+        pytest.approx(1.0)
+    )
     assert _value(
         featured, "ciudad_bolivar", day, "rain_ciudad_bolivar_lag_14"
     ) == pytest.approx(18.0)
     assert _value(featured, "ciudad_bolivar", day, "oni_lag_30") == (pytest.approx(0.0))
-    # The downstream column exists in the table, but selection must not use it.
-    assert _value(featured, "ciudad_bolivar", day, "palua_lag_14") == (
-        pytest.approx(56.0)
+    # Palua is downstream of every station, so it has no lag columns of its own.
+    assert "palua_lag_14" not in featured.columns
+    # The annual cycle is off by default: no sin/cos columns.
+    assert "sin_doy" not in featured.columns
+    assert "cos_doy" not in featured.columns
+
+
+def test_default_features_match_the_configured_lag_set() -> None:
+    levels = _levels(days=30)
+    featured = add_river_features(levels, include_rain=False, include_oni=False)
+
+    assert set(featured.columns) - set(levels.columns) == {
+        "ayacucho_lag_7",
+        "ayacucho_lag_14",
+        "caicara_lag_4",
+        "ciudad_bolivar_lag_1",
+        "d_ayacucho_lag_3",
+        "d_caicara_lag_3",
+        "d_ciudad_bolivar_lag_1",
+    }
+
+
+def test_daily_change_lags_use_day_over_day_differences() -> None:
+    spike_day = START + timedelta(days=20)
+    day = START + timedelta(days=24)
+    frame = _levels(days=60).with_columns(
+        pl.when((pl.col("unique_id") == "ayacucho") & (pl.col("ds") == spike_day))
+        .then(pl.col("y") + 5.0)
+        .otherwise(pl.col("y"))
+        .alias("y")
     )
+
+    featured = add_river_features(frame, include_rain=False, include_oni=False)
+
+    # d_ayacucho(t) = y(t) - y(t - 1); the spike makes d(20) = 6 and d(21) = -4.
+    assert _value(featured, "palua", day, "d_ayacucho_lag_3") == pytest.approx(-4.0)
+    early = featured.filter(
+        (pl.col("unique_id") == "ciudad_bolivar")
+        & (pl.col("ds") < START + timedelta(days=4))
+    )
+    assert early["d_ayacucho_lag_3"].null_count() == 4
 
 
 def test_calendar_features_are_deterministic() -> None:
@@ -120,7 +176,7 @@ def test_calendar_features_are_deterministic() -> None:
 
 
 def test_select_exog_columns_uses_only_upstream_and_safe_lags() -> None:
-    featured = add_river_features(_levels(days=60))
+    featured = _rich_features()
     columns = featured.columns
 
     city = select_exog_columns(columns, station="ciudad_bolivar")
@@ -147,7 +203,7 @@ def test_select_exog_columns_uses_only_upstream_and_safe_lags() -> None:
 
 
 def test_select_exog_columns_can_disable_own_lags() -> None:
-    featured = add_river_features(_levels(days=60))
+    featured = _rich_features()
     selected = select_exog_columns(
         featured.columns,
         station="ciudad_bolivar",
@@ -159,7 +215,7 @@ def test_select_exog_columns_can_disable_own_lags() -> None:
 
 
 def test_select_exog_columns_can_disable_groups() -> None:
-    featured = add_river_features(_levels(days=60))
+    featured = _rich_features()
     selected = select_exog_columns(
         featured.columns,
         station="palua",
@@ -187,6 +243,7 @@ def test_parse_feature_column() -> None:
         21,
     )
     assert parse_feature_column("oni_lag_0") == ("oni", 0)
+    assert parse_feature_column("d_ayacucho_lag_3") == ("d_ayacucho", 3)
     assert parse_feature_column("sin_doy") is None
     assert parse_feature_column("ayacucho") is None
 
@@ -195,14 +252,17 @@ def test_load_feature_config_defaults_and_overrides() -> None:
     default = load_feature_config({})
     assert default.river_order == RIVER_ORDER
     assert default.min_exog_lag == 14
+    assert default.station_lags == DEFAULT_STATION_LAGS
+    assert default.diff_lags == DEFAULT_DIFF_LAGS
+    assert default.calendar_terms == 0
 
     custom = load_feature_config(
         {
             "features": {
                 "river_order": ["a", "b", "c"],
                 "min_exog_lag": 7,
-                "upstream_lags": [7, 14],
-                "target_lags": [1, 2],
+                "station_lags": {"a": [7, 14], "b": [4]},
+                "diff_lags": {"a": [3]},
                 "rain_lags": [7],
                 "oni_lags": [0, 30],
                 "calendar_terms": 2,
@@ -211,8 +271,8 @@ def test_load_feature_config_defaults_and_overrides() -> None:
     )
     assert custom.river_order == ("a", "b", "c")
     assert custom.min_exog_lag == 7
-    assert custom.upstream_lags == (7, 14)
-    assert custom.target_lags == (1, 2)
+    assert custom.station_lags == {"a": (7, 14), "b": (4,)}
+    assert custom.diff_lags == {"a": (3,)}
     assert custom.rain_lags == (7,)
     assert custom.oni_lags == (0, 30)
     assert custom.calendar_terms == 2
@@ -221,8 +281,14 @@ def test_load_feature_config_defaults_and_overrides() -> None:
 def test_feature_config_rejects_invalid_values() -> None:
     with pytest.raises(ValueError, match="river_order"):
         RiverFeatureConfig(river_order=("a", "a"))
-    with pytest.raises(ValueError, match="upstream_lags"):
-        RiverFeatureConfig(upstream_lags=(0,))
+    with pytest.raises(ValueError, match="station_lags"):
+        RiverFeatureConfig(station_lags={"ayacucho": (0,)})
+    with pytest.raises(ValueError, match="station_lags"):
+        RiverFeatureConfig(station_lags={"unknown": (1,)})
+    with pytest.raises(ValueError, match="station_lags"):
+        RiverFeatureConfig(station_lags=["not", "a", "mapping"])
+    with pytest.raises(ValueError, match="diff_lags"):
+        RiverFeatureConfig(diff_lags={"caicara": (-1,)})
     with pytest.raises(ValueError, match="oni_lags"):
         RiverFeatureConfig(oni_lags=(-1,))
     with pytest.raises(ValueError, match="min_exog_lag"):
@@ -231,6 +297,8 @@ def test_feature_config_rejects_invalid_values() -> None:
         RiverFeatureConfig(calendar_terms=-1)
     with pytest.raises(ValueError, match="features"):
         load_feature_config({"features": ["not", "a", "dict"]})
+    with pytest.raises(ValueError, match="station_lags y diff_lags"):
+        load_feature_config({"features": {"upstream_lags": [14]}})
 
 
 def test_add_river_features_preserves_columns_and_sorts() -> None:
@@ -266,8 +334,8 @@ def test_add_river_features_requires_oni_when_configured() -> None:
 def test_add_river_features_can_skip_calendar_and_lags() -> None:
     frame = _levels(days=30)
     config = RiverFeatureConfig(
-        upstream_lags=(),
-        target_lags=(),
+        station_lags={},
+        diff_lags={},
         rain_lags=(),
         oni_lags=(),
         calendar_terms=0,
@@ -286,7 +354,15 @@ def test_features_do_not_read_future_values() -> None:
 
     original = add_river_features(frame)
     changed = add_river_features(tampered)
-    for column in ("ayacucho_lag_14", "caicara_lag_21", "ciudad_bolivar_lag_1"):
+    for column in (
+        "ayacucho_lag_14",
+        "ayacucho_lag_7",
+        "caicara_lag_4",
+        "ciudad_bolivar_lag_1",
+        "d_ayacucho_lag_3",
+        "d_caicara_lag_3",
+        "d_ciudad_bolivar_lag_1",
+    ):
         assert _value(original, "palua", day, column) == _value(
             changed, "palua", day, column
         )

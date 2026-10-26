@@ -44,9 +44,17 @@ def test_write_parquet_writes_long_frame_with_lag_features(
     assert frame.height == wide.height * len(STATIONS)
     assert frame["unique_id"].n_unique() == len(STATIONS)
     assert frame.select(pl.struct("unique_id", "ds").is_duplicated().sum()).item() == 0
-    assert {"ayacucho_lag_14", "palua_lag_28", "sin_doy", "cos_doy"} <= set(
-        frame.columns
-    )
+    assert set(frame.columns) - {"unique_id", "ds", "y"} == {
+        "ayacucho_lag_7",
+        "ayacucho_lag_14",
+        "caicara_lag_4",
+        "ciudad_bolivar_lag_1",
+        "d_ayacucho_lag_3",
+        "d_caicara_lag_3",
+        "d_ciudad_bolivar_lag_1",
+    }
+    assert "sin_doy" not in frame.columns
+    assert "cos_doy" not in frame.columns
     assert frame.equals(frame.sort("unique_id", "ds"))
     # Un feature en t solo lee la fuente en t - lag.
     day = date(2020, 1, 31)
@@ -75,8 +83,8 @@ def test_write_parquet_accepts_feature_config(tmp_path, monkeypatch) -> None:
     dataset = TimeSeriesDataset(output)
     _patch_wide(monkeypatch, dataset, _wide())
     config = RiverFeatureConfig(
-        upstream_lags=(1,),
-        target_lags=(1,),
+        station_lags={"ayacucho": (1,)},
+        diff_lags={},
         rain_lags=(),
         oni_lags=(0,),
         calendar_terms=0,

@@ -70,8 +70,13 @@ def _network_history(days: int = 500) -> pl.DataFrame:
     return add_river_features(
         frame,
         RiverFeatureConfig(
-            upstream_lags=(14, 21),
-            target_lags=(1, 2, 14, 21),
+            station_lags={
+                "ayacucho": (1, 2, 14, 21),
+                "caicara": (1, 2, 14, 21),
+                "ciudad_bolivar": (1, 2, 14, 21),
+                "palua": (1, 2, 14, 21),
+            },
+            diff_lags={},
             rain_lags=(14, 21),
             oni_lags=(0, 30),
             calendar_terms=1,

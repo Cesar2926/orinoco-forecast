@@ -1,7 +1,8 @@
 """Dataset diario de niveles del río extraído desde el libro de Excel.
 
-El Parquet escrito es la tabla larga ``unique_id, ds, y`` con los rezagos
-aguas arriba y el calendario de :mod:`orinoco_forecast.features.lags`.
+El Parquet escrito es la tabla larga ``unique_id, ds, y`` con los rezagos de
+nivel y de cambio diario configurados en ``configs/data.yaml`` (ver
+:mod:`orinoco_forecast.features.lags`).
 """
 
 import warnings
@@ -129,12 +130,13 @@ class TimeSeriesDataset:
         *,
         feature_config: RiverFeatureConfig | None = None,
     ) -> Path:
-        """Escribe la tabla larga con los rezagos y el calendario de ``lags``.
+        """Escribe la tabla larga con los rezagos configurados en ``features``.
 
-        Los rezagos de estaciones y los términos de calendario salen de
-        ``configs/data.yaml`` (sección ``features``) salvo que se pase
-        ``feature_config``. Lluvia y ONI se agregan solo si el Excel las trae;
-        hoy el libro solo contiene niveles.
+        Las columnas ``<estacion>_lag_<n>`` (nivel) y ``d_<estacion>_lag_<n>``
+        (cambio diario) salen de ``configs/data.yaml`` salvo que se pase
+        ``feature_config``. El calendario ``sin_doy``/``cos_doy`` queda apagado
+        con ``calendar_terms: 0``. Lluvia y ONI se agregan solo si el Excel las
+        trae; hoy el libro solo contiene niveles.
         """
         if output_path is not None:
             self.output_path = Path(output_path)

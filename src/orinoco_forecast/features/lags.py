@@ -1,9 +1,14 @@
-"""Leakage-safe lag and calendar features for the Orinoco river network.
+"""Leakage-safe lag features for the Orinoco river network.
 
 The long table keeps one row per station and date. A feature dated ``t`` is
 built only from a source value dated ``t - lag``; it never reads ``t`` or a
 later date. The river order is directional: a station may only consume levels
 from stations that are upstream of it.
+
+Two families of lagged columns are written from ``configs/data.yaml``:
+
+- ``<station>_lag_<n>``: level of ``station`` at ``t - n``.
+- ``d_<station>_lag_<n>``: day-over-day change of ``station`` at ``t - n``.
 """
 
 from __future__ import annotations
@@ -11,8 +16,8 @@ from __future__ import annotations
 import math
 import re
 import warnings
-from collections.abc import Iterable, Sequence
-from dataclasses import dataclass
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import Any
 
@@ -25,6 +30,20 @@ RIVER_ORDER = ("ayacucho", "caicara", "ciudad_bolivar", "palua")
 MAX_EXOG_FALLBACK_DAYS = 7
 FEATURE_PATTERN = re.compile(r"^(?P<source>.+)_lag_(?P<lag>\d+)$")
 CALENDAR_PATTERN = re.compile(r"^(?P<base>sin|cos)_doy(?:_(?P<harmonic>\d+))?$")
+
+# Explicit lag selection per station. Only the stations listed here get lag
+# columns; the set is deliberately small and maps each source to the downstream
+# stations that consume it.
+DEFAULT_STATION_LAGS: dict[str, tuple[int, ...]] = {
+    "ayacucho": (7, 14),
+    "caicara": (4,),
+    "ciudad_bolivar": (1,),
+}
+DEFAULT_DIFF_LAGS: dict[str, tuple[int, ...]] = {
+    "ayacucho": (3,),
+    "caicara": (3,),
+    "ciudad_bolivar": (1,),
+}
 
 
 def _station_tuple(values: Iterable[str]) -> tuple[str, ...]:
@@ -56,25 +75,52 @@ def _lag_tuple(
     return lags
 
 
+def _lag_mapping(
+    values: Mapping[str, Iterable[int]],
+    label: str,
+    river_order: tuple[str, ...],
+) -> dict[str, tuple[int, ...]]:
+    """Normalize a station -> lags mapping and validate its station names."""
+    if not isinstance(values, Mapping):
+        raise ValueError(f"{label} debe ser un diccionario estación -> rezagos.")
+    unknown = [station for station in values if station not in river_order]
+    if unknown:
+        raise ValueError(
+            f"{label} contiene estaciones fuera de river_order: {unknown}."
+        )
+    return {
+        str(station): _lag_tuple(lags, f"{label}[{station!r}]")
+        for station, lags in values.items()
+    }
+
+
 @dataclass(frozen=True)
 class RiverFeatureConfig:
     """Configuration for the river lag features written to the long table."""
 
     river_order: tuple[str, ...] = RIVER_ORDER
     min_exog_lag: int = 14
-    upstream_lags: tuple[int, ...] = (14, 21, 28)
-    target_lags: tuple[int, ...] = (1, 2, 3, 7, 14, 21, 28)
+    station_lags: Mapping[str, Sequence[int]] = field(
+        default_factory=lambda: dict(DEFAULT_STATION_LAGS)
+    )
+    diff_lags: Mapping[str, Sequence[int]] = field(
+        default_factory=lambda: dict(DEFAULT_DIFF_LAGS)
+    )
     rain_lags: tuple[int, ...] = (14, 21, 28)
     oni_lags: tuple[int, ...] = (0, 30, 60)
-    calendar_terms: int = 1
+    calendar_terms: int = 0
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "river_order", _station_tuple(self.river_order))
         object.__setattr__(
-            self, "upstream_lags", _lag_tuple(self.upstream_lags, "upstream_lags")
+            self,
+            "station_lags",
+            _lag_mapping(self.station_lags, "station_lags", self.river_order),
         )
         object.__setattr__(
-            self, "target_lags", _lag_tuple(self.target_lags, "target_lags")
+            self,
+            "diff_lags",
+            _lag_mapping(self.diff_lags, "diff_lags", self.river_order),
         )
         object.__setattr__(self, "rain_lags", _lag_tuple(self.rain_lags, "rain_lags"))
         object.__setattr__(
@@ -99,14 +145,19 @@ def load_feature_config(config: dict[str, Any]) -> RiverFeatureConfig:
         settings = {}
     if not isinstance(settings, dict):
         raise ValueError("features debe ser un diccionario.")
+    legacy = sorted({"upstream_lags", "target_lags"}.intersection(settings))
+    if legacy:
+        raise ValueError(
+            f"features ya no admite {legacy}; usa station_lags y diff_lags."
+        )
     return RiverFeatureConfig(
         river_order=tuple(settings.get("river_order", RIVER_ORDER)),
         min_exog_lag=int(settings.get("min_exog_lag", 14)),
-        upstream_lags=tuple(settings.get("upstream_lags", (14, 21, 28))),
-        target_lags=tuple(settings.get("target_lags", (1, 2, 3, 7, 14, 21, 28))),
+        station_lags=settings.get("station_lags", DEFAULT_STATION_LAGS),
+        diff_lags=settings.get("diff_lags", DEFAULT_DIFF_LAGS),
         rain_lags=tuple(settings.get("rain_lags", (14, 21, 28))),
         oni_lags=tuple(settings.get("oni_lags", (0, 30, 60))),
-        calendar_terms=int(settings.get("calendar_terms", 1)),
+        calendar_terms=int(settings.get("calendar_terms", 0)),
     )
 
 
@@ -297,14 +348,16 @@ def add_river_features(
     include_rain: bool = True,
     include_oni: bool = True,
 ) -> pl.DataFrame:
-    """Append leakage-safe station, rain, ONI and calendar features.
+    """Append leakage-safe station, daily-change, rain and ONI features.
 
-    Station levels are written as ``<station>_lag_<n>``, rain as
-    ``rain_<station>_lag_<n>``, ONI as ``oni_lag_<n>`` and the annual cycle as
-    ``sin_doy``/``cos_doy`` plus optional harmonics. ``include_rain`` and
-    ``include_oni`` permiten construir features solo con niveles cuando las
-    exógenas aún no están disponibles. The input frame is not modified; the
-    returned frame preserves its columns and sorts by ``unique_id, ds``.
+    Levels are written as ``<station>_lag_<n>``; day-over-day changes as
+    ``d_<station>_lag_<n>``. Which stations and lags appear is defined by
+    ``station_lags`` and ``diff_lags`` (see ``configs/data.yaml``). Rain and ONI
+    stay optional via ``rain_lags``/``oni_lags`` plus ``include_rain`` and
+    ``include_oni``. The annual cycle is off by default; when
+    ``calendar_terms > 0`` it is written as ``sin_doy``/``cos_doy`` plus optional
+    harmonics. The input frame is not modified; the returned frame preserves its
+    columns and sorts by ``unique_id, ds``.
     """
     config = config or RiverFeatureConfig()
     _validate_levels(levels)
@@ -321,18 +374,35 @@ def add_river_features(
         .pivot(index="ds", on="unique_id", values="y", aggregate_function="first")
         .sort("ds")
     )
-    station_lags = tuple(sorted(set(config.target_lags) | set(config.upstream_lags)))
     feature_frames: list[pl.DataFrame] = []
-    for station in config.river_order:
-        if station_lags:
+    for station, lags in config.station_lags.items():
+        if lags:
             feature_frames.append(
                 _lag_frame(
                     wide.select("ds", station),
                     station,
-                    station_lags,
+                    lags,
                     f"{station}_lag_",
                 )
             )
+    if config.diff_lags:
+        changes = wide.with_columns(
+            *(
+                pl.col(station).diff().alias(f"d_{station}")
+                for station in config.diff_lags
+            )
+        )
+        for station, lags in config.diff_lags.items():
+            if lags:
+                column = f"d_{station}"
+                feature_frames.append(
+                    _lag_frame(
+                        changes.select("ds", column),
+                        column,
+                        lags,
+                        f"{column}_lag_",
+                    )
+                )
     for station in config.river_order:
         column = f"rain_{station}"
         if include_rain and config.rain_lags and column in levels.columns:
