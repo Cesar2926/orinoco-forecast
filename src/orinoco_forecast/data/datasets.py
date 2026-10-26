@@ -1,4 +1,8 @@
-"""Dataset diario de niveles del río extraído desde el libro de Excel."""
+"""Dataset diario de niveles del río extraído desde el libro de Excel.
+
+El Parquet escrito es la tabla larga ``unique_id, ds, y`` con los rezagos
+aguas arriba y el calendario de :mod:`orinoco_forecast.features.lags`.
+"""
 
 import warnings
 from datetime import date
@@ -8,8 +12,14 @@ import polars as pl
 
 from orinoco_forecast.data.loading import (
     DataQualityWarning,
+    load_config,
     repo_root,
     validate_daily_dates,
+)
+from orinoco_forecast.features.lags import (
+    RiverFeatureConfig,
+    add_river_features,
+    load_feature_config,
 )
 
 DEFAULT_SOURCE = repo_root() / "data" / "raw" / "DATOS RIO ORINOCO.xlsx"
@@ -66,9 +76,9 @@ class TimeSeriesDataset:
             ),
         ).filter(pl.col("_date").is_not_null() & (pl.col("_date") != ""))
 
-        parsed_datetime = pl.col("_date").str.to_datetime(
-            "%Y-%m-%d %H:%M:%S", strict=False
-        ).dt.date()
+        parsed_datetime = (
+            pl.col("_date").str.to_datetime("%Y-%m-%d %H:%M:%S", strict=False).dt.date()
+        )
         parsed_serial = (
             pl.lit(date(1899, 12, 30))
             + pl.duration(days=pl.col("_date").cast(pl.Int64, strict=False))
@@ -95,13 +105,46 @@ class TimeSeriesDataset:
                 )
         return extracted
 
+    def extract_levels(
+        self,
+        path: str | Path = DEFAULT_SOURCE,
+        sheet_name: str = DEFAULT_SHEET,
+    ) -> pl.DataFrame:
+        """Extrae los niveles del Excel en tabla larga ``unique_id, ds, y``."""
+        return (
+            self.extract_xlsx(path, sheet_name)
+            .unpivot(
+                index="ds",
+                on=list(STATIONS),
+                variable_name="unique_id",
+                value_name="y",
+            )
+            .select("unique_id", "ds", "y")
+            .sort("unique_id", "ds")
+        )
+
     def write_parquet(
         self,
         output_path: str | Path | None = None,
+        *,
+        feature_config: RiverFeatureConfig | None = None,
     ) -> Path:
+        """Escribe la tabla larga con los rezagos y el calendario de ``lags``.
+
+        Los rezagos de estaciones y los términos de calendario salen de
+        ``configs/data.yaml`` (sección ``features``) salvo que se pase
+        ``feature_config``. Lluvia y ONI se agregan solo si el Excel las trae;
+        hoy el libro solo contiene niveles.
+        """
         if output_path is not None:
             self.output_path = Path(output_path)
-        frame = self.extract_xlsx()
+        config = feature_config or load_feature_config(load_config())
+        levels = self.extract_levels()
+        frame = add_river_features(
+            levels,
+            config,
+            include_oni="oni" in levels.columns,
+        )
         self.output_path.parent.mkdir(parents=True, exist_ok=True)
         frame.write_parquet(self.output_path)
         return self.output_path
