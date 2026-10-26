@@ -35,7 +35,13 @@ exogenous:
 
 # Model-ready frame built by orinoco_forecast.features.dataset.build_model_frame.
 model_frame:
-  upstream: [ayacucho, caicara] # Historical covariates (past values only).
+  # Historical covariates (past values only). Ciudad Bolivar is Palua's nearest
+  # upstream station; on Ciudad Bolivar rows it equals the target's own level.
+  # Not leakage: XGBoost lags covariates >= horizon and TCN slices hist_exog to
+  # the input window. TCN's difference mode also adds level_y (same values on
+  # those rows); the duplicate channel stays because neuralforecast exogenous
+  # lists are shared by all series.
+  upstream: [ayacucho, caicara, ciudad_bolivar]
   # Period accepted by the professor; data outside it is not used.
   start: "2009-01-01"
   end: "2024-12-31"

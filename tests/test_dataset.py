@@ -113,6 +113,7 @@ def test_model_frame_stage_a(model_frame_a: pl.DataFrame) -> None:
         "y",
         "ayacucho",
         "caicara",
+        "ciudad_bolivar",
         *FOURIER,
         "imputed",
     ]
@@ -122,13 +123,16 @@ def test_model_frame_stage_a(model_frame_a: pl.DataFrame) -> None:
     assert frame["ds"].max() == PERIOD_END
     assert frame.height == 2 * N_DAYS
     assert frame.select(pl.col("ds").is_sorted().over("unique_id")).to_series().all()
+    # Ciudad Bolivar's own covariate column is its (cleaned) level.
+    cb = frame.filter(pl.col("unique_id") == "ciudad_bolivar")
+    assert (cb["y"] == cb["ciudad_bolivar"]).all()
 
 
 def test_model_frame_imputed_rows(model_frame_a: pl.DataFrame) -> None:
     imputed = model_frame_a.filter(pl.col("imputed"))
     days = set(imputed["ds"].to_list())
-    # Ciudad Bolivar flat run (19 days), Ayacucho flat run (12 days, covariate)
-    # and Palua's three missing Feb 29 values.
+    # Ciudad Bolivar flat run (19 days, covariate of both targets), Ayacucho flat
+    # run (12 days, covariate) and Palua's three missing Feb 29 values.
     cb_run = {date(2020, 3, 24) + timedelta(days=i) for i in range(19)}
     ay_run = {date(2019, 3, 7) + timedelta(days=i) for i in range(12)}
     feb29 = {date(2012, 2, 29), date(2016, 2, 29), date(2020, 2, 29)}
@@ -140,7 +144,7 @@ def test_model_frame_imputed_rows(model_frame_a: pl.DataFrame) -> None:
 def test_model_frame_stage_b(model_frame_b: pl.DataFrame) -> None:
     frame = model_frame_b
     rain = ["rain_ayacucho", "rain_caicara", "rain_ciudad_bolivar", "rain_palua"]
-    assert set(rain + ["oni", *FOURIER]).issubset(frame.columns)
+    assert set(rain + ["oni", "ciudad_bolivar", *FOURIER]).issubset(frame.columns)
     assert frame["imputed"].dtype == pl.Boolean and frame.columns[-1] == "imputed"
     assert frame["ds"].min() == PERIOD_START
     assert frame["ds"].max() == PERIOD_END
