@@ -4,6 +4,11 @@ source: orinoco_stations
 horizon: 14 # Daily forecast horizon, shared by every runner.
 test_start: "2023-01-01" # Held-out test period; never used for model selection.
 seasonality: 365 # SeasonalNaive period (MASE is horizon-matched, not seasonal).
+# Walk-forward folds evaluated together by `scripts/run_model.py --folds`.
+# The last cutoff is derived from test_start and the horizon; the first one is
+# `n_windows - 1` steps earlier.
+n_windows: 24
+step_size: 30
 # Shared input window for build_windows. ML models may override it through their
 # own config; statistical runners use the contiguous history instead.
 input_length: 28

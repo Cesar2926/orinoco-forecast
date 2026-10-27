@@ -16,7 +16,6 @@ import polars as pl
 
 from orinoco_forecast.data.datasets import TimeSeriesDataset
 from orinoco_forecast.data.windows import build_windows
-from orinoco_forecast.evaluation.backtest import load_backtest_config
 from orinoco_forecast.evaluation.metrics import StatisticsResult, compute_statistics
 from orinoco_forecast.models.base import (
     DEFAULT_HORIZON,
@@ -143,7 +142,8 @@ def _target_prediction(result: PredictionResult) -> PredictionResult:
     )
 
 
-def _require_implemented(runner: Any, label: str) -> Runner:
+def require_implemented(runner: Any, label: str) -> Runner:
+    """Reject structure-only runners before any data is loaded or fitted."""
     if not getattr(runner, "implemented", True):
         raise ValueError(
             f"El runner {runner.name!r} ({label}) solo tiene estructura; "
@@ -169,8 +169,8 @@ def run_runners(
 ) -> ExecutionResult:
     """Fit and predict both runners, then score the observed validation slice."""
     validate_horizon(horizon)
-    _require_implemented(runner, "modelo")
-    _require_implemented(against, "comparación")
+    require_implemented(runner, "modelo")
+    require_implemented(against, "comparación")
     history = history_frame(frame, cutoff)
     observed = observed_frame(frame, cutoff, horizon)
     steps = set((observed["ds"] - cutoff).dt.total_days().to_list())
@@ -219,6 +219,10 @@ def execute(
     write: bool = True,
 ) -> ExecutionResult:
     """Run ``model`` against ``against`` with the shared protocol."""
+    # Local import: ``evaluation.backtest`` imports this module to run the
+    # walk-forward sweep, so a module-level import would create a cycle.
+    from orinoco_forecast.evaluation.backtest import load_backtest_config
+
     cfg = load_backtest_config()
     horizon = int(cfg["horizon"]) if horizon is None else validate_horizon(horizon)
     input_length = (
@@ -226,8 +230,8 @@ def execute(
         if input_length is None
         else input_length
     )
-    runner = _require_implemented(get_runner(model), "modelo")
-    baseline = _require_implemented(get_runner(against), "comparación")
+    runner = require_implemented(get_runner(model), "modelo")
+    baseline = require_implemented(get_runner(against), "comparación")
     data = load_history() if frame is None else frame
     cutoff = resolve_cutoff(data, cfg, cutoff, horizon)
     result = run_runners(
