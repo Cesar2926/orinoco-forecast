@@ -41,7 +41,6 @@ from orinoco_forecast.models.registry import get_runner
 from orinoco_forecast.utils.io import predictions_dir, write_parquet
 
 DEFAULT_STATION = "ciudad_bolivar"
-PROTOCOL_KEYS = ("test_start", "n_windows", "step_size")
 BACKTEST_FOLDER = "backtest"
 FOLD_PREDICTIONS_FILE = "fold_predictions.parquet"
 FOLD_STATISTICS_FILE = "fold_statistics.parquet"
@@ -162,7 +161,7 @@ def build_splits(
     missing = sorted(required.difference(frame.columns))
     if missing:
         raise ValueError(f"Faltan columnas requeridas: {missing}.")
-    dates = frame.filter(pl.col("unique_id") == station)["ds"].sort().unique().to_list()
+    dates = frame.filter(pl.col("unique_id") == station)["ds"].unique().sort().to_list()
     if not dates:
         raise ValueError(f"No hay fechas para la estación {station!r}.")
 

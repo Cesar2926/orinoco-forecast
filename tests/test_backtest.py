@@ -76,6 +76,15 @@ def test_build_splits_matches_the_protocol() -> None:
     assert splits[-1].validation_end == date(2022, 12, 31)
 
 
+def test_build_splits_deduplicates_repeated_dates() -> None:
+    repeated = _protocol_frame().filter(pl.col("ds") == date(2022, 12, 17))
+    frame = pl.concat([_protocol_frame(), repeated])
+
+    splits = build_splits(frame, _config(), horizon=14)
+
+    assert splits[-1].cutoff == date(2022, 12, 17)
+
+
 def test_build_splits_rejects_a_missing_protocol_key() -> None:
     config = _config()
     del config["n_windows"]
