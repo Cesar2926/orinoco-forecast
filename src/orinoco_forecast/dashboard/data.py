@@ -1,8 +1,8 @@
 """Read-only data shaping for the dashboard (no training, no final test).
 
-Reads ``data/predictions/<model>/stage_<A|B>/{cv,metrics}.parquet`` written by
-``scripts/run_model.py`` and returns tidy Polars frames for the charts. Files left
-at ``<model>/`` by runs before the stage split are ignored.
+Reads ``data/predictions/<runner>/{predictions,statistics}.parquet`` written by
+``scripts/run_model.py`` and returns tidy Polars frames for the charts. The
+legacy ``stage_<A|B>/{cv,metrics}.parquet`` layout is no longer supported.
 """
 
 import os
@@ -14,15 +14,13 @@ import polars as pl
 
 from orinoco_forecast.data.loading import repo_root
 from orinoco_forecast.data.quality import QUALITY_LABELS
-from orinoco_forecast.evaluation.backtest import CV_KEYS, stage_dir
-from orinoco_forecast.evaluation.metrics import relative_to_baseline
 
 PREDICTIONS_ENV = "ORINOCO_PREDICTIONS_DIR"
-BASELINES = "baselines"
+BASELINES = "naive"
 HISTORY_DAYS = 60
-SEED_MEAN_LABEL = "{} (media de semillas)"
 TABLE_METRICS = ("mae", "rel_mae", "rmse", "mase", "nse", "kge")
-STAGE_LABELS = {"A": "Etapa A: solo río", "B": "Etapa B: río + lluvia + ONI"}
+PREDICTIONS_FILE = "predictions.parquet"
+STATISTICS_FILE = "statistics.parquet"
 _SEED = r"^(.+)_s\d+$"
 
 
@@ -32,20 +30,17 @@ def predictions_root() -> Path:
     return Path(override) if override else repo_root() / "data" / "predictions"
 
 
-def run_command(model: str = "<modelo>", stage: str = "A") -> str:
-    """Comando que genera las predicciones de validación de ``model``."""
-    return f"uv run python scripts/run_model.py {model} --stage {stage}"
+def run_command(model: str = "<modelo>", against: str = BASELINES) -> str:
+    """Comando que genera las predicciones de ``model`` contra ``against``."""
+    return f"uv run python scripts/run_model.py {model} --against {against}"
 
 
-def discover_models(root: Path, stage: str = "A") -> list[str]:
-    """Modelos con ``stage_<etapa>/{cv,metrics}.parquet``; los baselines primero."""
+def discover_models(root: Path) -> list[str]:
+    """Runners con ``predictions.parquet``; el baseline primero."""
     if not root.is_dir():
         return []
     found = [
-        p.name
-        for p in root.iterdir()
-        if (stage_dir(root, p.name, stage) / "cv.parquet").is_file()
-        and (stage_dir(root, p.name, stage) / "metrics.parquet").is_file()
+        path.name for path in root.iterdir() if (path / PREDICTIONS_FILE).is_file()
     ]
     return sorted(found, key=lambda name: (name != BASELINES, name))
 
@@ -54,37 +49,58 @@ def _family() -> pl.Expr:
     return pl.coalesce(pl.col("model").str.extract(_SEED), pl.col("model"))
 
 
-def load_metrics(root: Path, models: list[str], stage: str = "A") -> pl.DataFrame:
-    """Métricas de todos los modelos de una etapa, con ``rel_mae``.
+def _belongs(folder: str) -> pl.Expr:
+    """Rows whose model column belongs to the runner folder (seed aware)."""
+    model = pl.col("model").str.to_lowercase()
+    return (model == folder) | model.str.starts_with(f"{folder}_")
 
-    ``rel_mae`` = MAE / MAE de Naive de la MISMA etapa. Queda nulo si no hay
-    baselines o si las ventanas no coinciden (con un warning, sin corregir nada).
+
+def load_metrics(root: Path, models: list[str]) -> pl.DataFrame:
+    """Métricas de todos los runners, sin duplicar filas de baseline.
+
+    Cada ``statistics.parquet`` contiene el modelo ejecutado y su baseline. Se
+    concatenan todos y se conserva la fila propia cuando existe; ``rel_mae`` es
+    el reportado por la corrida (columna ``against``).
     """
-    baseline = None
-    if BASELINES in models:
-        baseline = pl.read_parquet(
-            stage_dir(root, BASELINES, stage) / "metrics.parquet"
-        )
     frames = []
     for model in models:
-        metrics = pl.read_parquet(stage_dir(root, model, stage) / "metrics.parquet")
-        rel = pl.lit(None, dtype=pl.Float64).alias("rel_mae")
-        if baseline is not None:
-            try:
-                metrics = relative_to_baseline(metrics, baseline).drop("mae_naive")
-                rel = pl.col("rel_mae")
-            except ValueError as err:
-                warnings.warn(f"{model}: sin rel_mae ({err})", stacklevel=2)
-        frames.append(
-            metrics.with_columns(
-                rel.cast(pl.Float64),
-                pl.col("mae", "rmse", "mase", "nse", "kge").cast(pl.Float64),
-                source=pl.lit(model),
-            ).select("source", "unique_id", "model", "horizon", "n", *TABLE_METRICS)
-        )
+        path = root / model / STATISTICS_FILE
+        if not path.is_file():
+            warnings.warn(
+                f"{model}: falta {STATISTICS_FILE}; se omite de las métricas.",
+                stacklevel=2,
+            )
+            continue
+        metrics = pl.read_parquet(path)
+        if "rel_mae" not in metrics.columns:
+            metrics = metrics.with_columns(rel_mae=pl.lit(None, dtype=pl.Float64))
+        frames.append(metrics.with_columns(source=pl.lit(model)))
     if not frames:
         return pl.DataFrame()
-    return pl.concat(frames).with_columns(family=_family())
+    combined = pl.concat(frames, how="diagonal_relaxed")
+    own = (pl.col("model").str.to_lowercase() == pl.col("source")) | pl.col(
+        "model"
+    ).str.to_lowercase().str.starts_with(pl.col("source") + "_")
+    return (
+        combined.with_columns(_own=own)
+        .sort("_own", descending=True)
+        .unique(subset=["unique_id", "model", "horizon"], keep="first")
+        .drop("_own")
+        .with_columns(
+            pl.col("mae", "rmse", "mase", "nse", "kge", "rel_mae").cast(pl.Float64),
+        )
+        .with_columns(family=_family())
+        .select(
+            "source",
+            "unique_id",
+            "model",
+            "family",
+            "horizon",
+            "n",
+            *TABLE_METRICS,
+            "against",
+        )
+    )
 
 
 def seed_stats(metrics: pl.DataFrame) -> pl.DataFrame:
@@ -93,8 +109,8 @@ def seed_stats(metrics: pl.DataFrame) -> pl.DataFrame:
         (pl.col("horizon") == "all") & pl.col("model").str.contains(_SEED)
     )
     aggs = [pl.len().alias("seeds")]
-    for m in TABLE_METRICS:
-        aggs += [pl.col(m).mean(), pl.col(m).std().alias(f"{m}_std")]
+    for metric in TABLE_METRICS:
+        aggs += [pl.col(metric).mean(), pl.col(metric).std().alias(f"{metric}_std")]
     return (
         seeded.group_by("unique_id", "family")
         .agg(aggs)
@@ -104,10 +120,7 @@ def seed_stats(metrics: pl.DataFrame) -> pl.DataFrame:
 
 
 def selection_table(metrics: pl.DataFrame) -> pl.DataFrame:
-    """Criterio del README: ``rel_mae < 1`` en cada estación y luego MAE medio.
-
-    ``beats_naive`` es nulo si falta ``rel_mae`` (sin baselines).
-    """
+    """Criterio del README: ``rel_mae < 1`` en cada estación y luego MAE medio."""
     return (
         metrics.filter(pl.col("horizon") == "all")
         .group_by("model")
@@ -119,51 +132,10 @@ def selection_table(metrics: pl.DataFrame) -> pl.DataFrame:
             mean_mae=pl.col("mae").mean(),
         )
         .sort(
-            pl.col("beats_naive").fill_null(False), "mean_mae", descending=[True, False]
+            pl.col("beats_naive").fill_null(False),
+            "mean_mae",
+            descending=[True, False],
         )
-    )
-
-
-def stage_comparison(metrics_a: pl.DataFrame, metrics_b: pl.DataFrame) -> pl.DataFrame:
-    """MAE y ``rel_mae`` (h=1..14) de cada modelo en la etapa A frente a la B.
-
-    Las semillas se promedian por familia. ``delta_mae`` = MAE B - MAE A
-    (negativo: la lluvia y el ONI ayudan). Nulo si una etapa no se ejecutó.
-    """
-
-    def summary(metrics: pl.DataFrame, stage: str) -> pl.DataFrame:
-        if metrics.is_empty():
-            schema = {"unique_id": pl.String, "model": pl.String}
-            schema |= {f"mae_{stage}": pl.Float64, f"rel_mae_{stage}": pl.Float64}
-            return pl.DataFrame(schema=schema)
-        return (
-            metrics.filter(pl.col("horizon") == "all")
-            .group_by("unique_id", pl.col("family").alias("model"))
-            .agg(
-                pl.col("mae").mean().alias(f"mae_{stage}"),
-                pl.col("rel_mae").mean().alias(f"rel_mae_{stage}"),
-            )
-        )
-
-    return (
-        summary(metrics_a, "A")
-        .join(
-            summary(metrics_b, "B"),
-            on=["unique_id", "model"],
-            how="full",
-            coalesce=True,
-        )
-        .with_columns(delta_mae=pl.col("mae_B") - pl.col("mae_A"))
-        .select(
-            "unique_id",
-            "model",
-            "mae_A",
-            "mae_B",
-            "delta_mae",
-            "rel_mae_A",
-            "rel_mae_B",
-        )
-        .sort("unique_id", "mae_A", nulls_last=True)
     )
 
 
@@ -179,40 +151,54 @@ def horizon_errors(metrics: pl.DataFrame, unique_id: str) -> pl.DataFrame:
     )
 
 
-def _with_seed_means(cv: pl.DataFrame) -> pl.DataFrame:
-    seeds: dict[str, list[str]] = {}
-    for col in cv.columns:
-        match = pl.Series([col]).str.extract(_SEED).item()
-        if match is not None:
-            seeds.setdefault(match, []).append(col)
-    means = [
-        pl.mean_horizontal(cols).alias(SEED_MEAN_LABEL.format(family))
-        for family, cols in seeds.items()
-        if len(cols) > 1
-    ]
-    return cv.with_columns(means) if means else cv
+def _seed_means(forecasts: pl.DataFrame, levels: pl.DataFrame) -> pl.DataFrame:
+    seeded = forecasts.filter(pl.col("model").str.contains(_SEED))
+    if seeded.is_empty():
+        return forecasts
+    means = (
+        seeded.with_columns(family=pl.col("model").str.extract(_SEED))
+        .group_by("unique_id", "cutoff", "ds", "family")
+        .agg(y_hat=pl.col("y_hat").mean())
+        .join(
+            levels.select("unique_id", "ds", "y"),
+            on=["unique_id", "ds"],
+            how="left",
+        )
+        .with_columns(model=pl.col("family") + " (media de semillas)")
+        .select("unique_id", "ds", "cutoff", "model", "y_hat", "y")
+    )
+    return pl.concat([forecasts, means])
 
 
-def load_forecasts(root: Path, models: list[str], stage: str = "A") -> pl.DataFrame:
-    """Predicciones de validación en formato largo (``model``, ``y_hat``).
+def load_forecasts(root: Path, models: list[str], levels: pl.DataFrame) -> pl.DataFrame:
+    """Predicciones en formato largo con el nivel observado (``y``).
 
     Las semillas se conservan y además se agrega su predicción media
     (``"<familia> (media de semillas)"``) solo para visualizar.
     """
     frames = []
     for model in models:
-        cv = _with_seed_means(
-            pl.read_parquet(stage_dir(root, model, stage) / "cv.parquet")
-        )
-        value_cols = [c for c in cv.columns if c not in CV_KEYS]
+        path = root / model / PREDICTIONS_FILE
+        if not path.is_file():
+            continue
+        predictions = pl.read_parquet(path)
         frames.append(
-            cv.with_columns(pl.col(value_cols).cast(pl.Float64)).unpivot(
-                on=value_cols, index=CV_KEYS, variable_name="model", value_name="y_hat"
+            predictions.select(
+                "unique_id",
+                "ds",
+                "cutoff",
+                pl.col("model"),
+                pl.col("y_pred").alias("y_hat"),
             )
         )
     if not frames:
         return pl.DataFrame()
-    return pl.concat(frames)
+    forecasts = pl.concat(frames).join(
+        levels.select("unique_id", "ds", "y"),
+        on=["unique_id", "ds"],
+        how="left",
+    )
+    return _seed_means(forecasts, levels)
 
 
 def forecast_window(
@@ -224,11 +210,7 @@ def forecast_window(
     horizon: int = 14,
     history_days: int = HISTORY_DAYS,
 ) -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame]:
-    """Historia (``history_days`` hasta el corte), lo observado después y pronósticos.
-
-    El corte es el último día conocido por el modelo; los pronósticos empiezan
-    en ``cutoff + 1``.
-    """
+    """Historia hasta el corte, lo observado después y los pronósticos."""
     station = levels.filter(pl.col("unique_id") == unique_id)
     start = cutoff - timedelta(days=history_days - 1)
     end = cutoff + timedelta(days=horizon)

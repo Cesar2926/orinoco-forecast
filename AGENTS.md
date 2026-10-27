@@ -61,5 +61,5 @@ Celdas siguientes pueden usar `%%bash` + `make <objetivo>`. `uv sync` descargar�
 
 - Mensajes de warning y docstrings en español; identificadores de código en inglés.
 - Commits pequeños y descriptivos estilo `chore:`/`feat:`/`docs:`; no hacer push a ramas principales.
-- Configuración compartida (`horizon`, `step_size`, `n_windows`, `test_start`) vive solo en `configs/backtest.yaml`; los hiperparámetros por modelo (incluida la ventana de entrada) en `configs/models/`.
+- Configuración compartida (`horizon`, `input_length`, `test_start`, `seasonality`) vive solo en `configs/backtest.yaml`; los hiperparámetros por modelo (incluida la ventana de entrada) en `configs/models/`.
 - Los archivos de `data/raw/` están versionados en git y los tests los leen directamente: no se editan, mueven ni borran sin instrucción.

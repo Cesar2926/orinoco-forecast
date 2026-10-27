@@ -1,1 +1,1 @@
-"""Model package: forecasting protocol, baselines, and configured models."""
+"""Model package: runner contract, statistical engines and configured runners."""

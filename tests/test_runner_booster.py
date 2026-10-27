@@ -6,11 +6,7 @@ import polars as pl
 import pytest
 
 from orinoco_forecast.data.windows import build_windows
-from orinoco_forecast.models.trees.tree import (
-    BoosterRunner,
-    XGBoostRunner,
-    load_tree_config,
-)
+from orinoco_forecast.models.trees.tree import BoosterRunner, load_tree_config
 
 EPOCH = date(1970, 1, 1)
 CUTOFF = date(2022, 12, 1)
@@ -96,6 +92,9 @@ def test_booster_rejects_empty_windows() -> None:
         )
 
 
-def test_booster_keeps_the_legacy_xgboost_runner_available() -> None:
-    assert issubclass(BoosterRunner, XGBoostRunner)
-    assert BoosterRunner.name == "booster"
+def test_booster_rejects_covariate_lags_shorter_than_the_horizon() -> None:
+    frame = _synthetic()
+    params = load_tree_config()
+    runner = BoosterRunner({**params, "covariate_lags": [1, 2]})
+    with pytest.raises(ValueError, match="horizonte"):
+        runner.fit(_windows(frame), frame, cutoff=CUTOFF, horizon=HORIZON)

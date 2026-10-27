@@ -1,5 +1,10 @@
 # Modelos de ensamble de árboles (XGBoost) y red convolucional (TCN)
 
+> **Documento histórico.** Los resultados, etapas A/B y comandos de validación cruzada de
+> este documento corresponden al pipeline anterior. La ruta actual es
+> `scripts/run_model.py <runner> --against naive`, con salidas en
+> `data/predictions/<runner>/{predictions,statistics}.parquet`.
+
 Este documento describe cómo se prepararon los datos, cómo se evalúan los modelos, cómo
 se construyeron y ajustaron los dos modelos de esta parte del proyecto (XGBoost y TCN) y
 qué resultados obtuvieron. Está pensado como insumo para el informe final. El protocolo

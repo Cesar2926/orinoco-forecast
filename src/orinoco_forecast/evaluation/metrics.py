@@ -292,8 +292,8 @@ def relative_to_baseline(
       ``unique_id`` y ``horizon`` con las filas ``baseline_model`` de ``baseline``.
       ``rel_mae < 1`` significa que el modelo supera a esa referencia.
     - Las métricas no guardan los cortes, así que se asume que ambos marcos
-      vienen de ``run_cv`` con el mismo ``configs/backtest.yaml``. Como control,
-      ``n`` (filas puntuadas) debe coincidir; si no, ``ValueError``.
+      vienen de la misma corrida de runners. Como control, ``n`` (filas
+      puntuadas) debe coincidir; si no, ``ValueError``.
     - ``ValueError`` si falta la referencia para algún ``unique_id``/``horizon``.
     """
     ref = baseline.filter(pl.col("model") == baseline_model).select(

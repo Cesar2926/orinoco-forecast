@@ -1,9 +1,9 @@
 """Tablero de solo lectura del proyecto Orinoco Forecast.
 
 Uso: ``uv run streamlit run app/dashboard.py`` (o ``make dashboard``).
-Lee los niveles de ``data/raw`` y las predicciones de validación guardadas en
-``data/predictions/<modelo>/stage_<A|B>/``; nunca entrena modelos ni lee el test
-final. La etapa se elige en la barra lateral.
+Lee los niveles de ``data/raw`` y las predicciones exportadas en
+``data/predictions/<runner>/{predictions,statistics}.parquet``; nunca entrena
+modelos ni lee el test final.
 ``ORINOCO_PREDICTIONS_DIR`` cambia la carpeta de predicciones (pruebas).
 """
 
@@ -16,11 +16,11 @@ import streamlit as st
 
 from orinoco_forecast.dashboard import charts, data
 from orinoco_forecast.data.loading import load_config, repo_root
-from orinoco_forecast.evaluation.backtest import load_backtest_config, stage_dir
+from orinoco_forecast.evaluation.backtest import load_backtest_config
 from orinoco_forecast.features.dataset import load_levels
 
 EXOGENOUS = repo_root() / "data" / "processed" / "orinoco_exogenous.parquet"
-MODEL_HINTS = ("baselines", "xgboost", "tcn")
+MODEL_HINTS = ("naive", "seasonal_naive", "arimax", "booster", "tcn")
 
 st.set_page_config(page_title="Orinoco Forecast", layout="wide")
 
@@ -34,30 +34,22 @@ def cached_levels() -> pl.DataFrame:
 
 def _stamp(root: Path) -> tuple[tuple[str, float], ...]:
     """Fechas de modificación: invalidan la caché al regenerar predicciones."""
-    files = sorted(root.glob("*/stage_*/*.parquet"))
-    return tuple((str(p), p.stat().st_mtime) for p in files)
+    files = sorted(root.glob("*/*.parquet"))
+    return tuple((str(path), path.stat().st_mtime) for path in files)
 
 
 @st.cache_data(show_spinner="Cargando predicciones…")
 def cached_predictions(
-    root: str, stage: str, stamp: tuple
+    root: str, stamp: tuple
 ) -> tuple[list[str], pl.DataFrame, pl.DataFrame]:
     path = Path(root)
-    models = data.discover_models(path, stage)
+    models = data.discover_models(path)
+    levels = cached_levels()
     return (
         models,
-        data.load_metrics(path, models, stage),
-        data.load_forecasts(path, models, stage),
+        data.load_metrics(path, models),
+        data.load_forecasts(path, models, levels),
     )
-
-
-@st.cache_data(show_spinner="Comparando etapas…")
-def cached_comparison(root: str, stamp: tuple) -> pl.DataFrame:
-    path = Path(root)
-    per_stage = [
-        data.load_metrics(path, data.discover_models(path, s), s) for s in ("A", "B")
-    ]
-    return data.stage_comparison(*per_stage)
 
 
 @st.cache_data
@@ -70,11 +62,8 @@ def _mtime(path: Path) -> float:
 
 
 def missing_predictions(models: tuple[str, ...] = MODEL_HINTS) -> None:
-    commands = "\n".join(data.run_command(m, stage) for m in models)
-    st.info(
-        f"No hay predicciones de validación de la etapa {stage} en "
-        f"`{root}`. Genérelas primero (los baselines antes que el resto):"
-    )
+    commands = "\n".join(data.run_command(model) for model in models)
+    st.info(f"No hay predicciones de runners en `{root}`. Genérelas primero:")
     st.code(commands, language="bash")
 
 
@@ -93,21 +82,12 @@ root = data.predictions_root()
 cfg = load_backtest_config()
 targets = load_config()["targets"]
 levels = cached_levels()
-stage_label = st.sidebar.radio(
-    "Etapa de los modelos",
-    list(data.STAGE_LABELS.values()),
-    key="stage",
-    help="Cambia las predicciones de todas las pestañas de modelos.",
-)
-stage = next(k for k, v in data.STAGE_LABELS.items() if v == stage_label)
-st.sidebar.markdown(
-    "**Etapa A**: el modelo solo ve niveles del río (objetivo y estaciones aguas "
-    "arriba) y el calendario, desde 1974. **Etapa B**: además lluvia diaria NASA "
-    "POWER y el índice ONI, desde 1981 (primer año con lluvia). Ambas etapas se "
-    "evalúan en los mismos 24 cortes."
-)
 stamp = _stamp(root)
-models, metrics, forecasts = cached_predictions(str(root), stage, stamp)
+models, metrics, forecasts = cached_predictions(str(root), stamp)
+st.sidebar.markdown(
+    "Cada runner se ejecuta en un corte y pronostica 1..14 días. Los runners "
+    "disponibles y su estado están en el README."
+)
 
 st.title("Orinoco Forecast")
 st.caption(
@@ -115,13 +95,8 @@ st.caption(
     "ya guardadas. No entrena modelos ni usa el bloque de test final "
     f"(desde {cfg['test_start']})."
 )
-tab_data, tab_val, tab_window, tab_imp = st.tabs(
-    [
-        "Datos",
-        "Validación de modelos",
-        "Pronóstico por ventana",
-        "Importancia de variables",
-    ]
+tab_data, tab_val, tab_window = st.tabs(
+    ["Datos", "Validación de modelos", "Pronóstico por ventana"]
 )
 
 with tab_data:
@@ -161,7 +136,7 @@ with tab_data:
     )
     st.dataframe(data.quality_counts(levels), hide_index=True)
 
-    st.subheader("Variables externas (etapa B)")
+    st.subheader("Variables externas")
     exogenous = cached_optional(str(EXOGENOUS), _mtime(EXOGENOUS))
     if exogenous is None:
         st.info(
@@ -193,23 +168,21 @@ with tab_val:
         missing_predictions()
     else:
         st.markdown(
-            f"{stage_label}. Modelos con predicciones: "
-            f"{', '.join(f'`{m}`' for m in models)}. "
-            f"Validación cruzada con {cfg['n_windows']} cortes cada "
-            f"{cfg['step_size']} días y horizonte de {cfg['horizon']} días, todo "
-            f"antes de {cfg['test_start']}."
+            f"Modelos con predicciones: {', '.join(f'`{m}`' for m in models)}. "
+            f"Cada runner se ejecuta en un corte y pronostica 1.."
+            f"{cfg['horizon']} días antes de {cfg['test_start']}."
         )
         if data.BASELINES not in models:
-            st.info("Sin baselines no se puede calcular rel_mae. Ejecute:")
-            st.code(data.run_command(data.BASELINES, stage), language="bash")
+            st.info("Sin el runner Naive no se puede comparar rel_mae. Ejecute:")
+            st.code(data.run_command(data.BASELINES), language="bash")
         st.subheader("Métricas por estación y modelo (h = 1..14)")
         st.markdown(
-            "Error promedio sobre los 14 días del horizonte y todas las ventanas. "
-            "MAE y RMSE en metros (más bajo es mejor); `rel_mae` = MAE / MAE de la "
-            "persistencia (Naive): la casilla marcada indica `rel_mae < 1`, es "
-            "decir, el modelo supera a repetir el último valor observado. NSE y KGE: "
-            "1 es perfecto. Las semillas de un modelo neuronal (`_s1`, `_s2`, …) se "
-            "muestran por separado."
+            "Error sobre el segmento de validación del corte ejecutado. "
+            "MAE y RMSE en metros (más bajo es mejor); `rel_mae` = MAE / MAE del "
+            "runner de comparación (`against`): la casilla marcada indica "
+            "`rel_mae < 1`, es decir, el modelo supera a ese baseline. NSE y KGE: "
+            "1 es perfecto; por paso son NaN con un solo corte. Las semillas de un "
+            "modelo neuronal (`_s1`, `_s2`, …) se muestran por separado."
         )
         table = (
             metrics.filter(pl.col("horizon") == "all")
@@ -264,28 +237,6 @@ with tab_val:
             width="stretch",
         )
 
-    comparison = cached_comparison(str(root), stamp)
-    if not comparison.is_empty():
-        st.subheader("Etapa A vs etapa B")
-        st.markdown(
-            "La etapa B agrega a cada modelo la lluvia diaria de NASA POWER en las "
-            "estaciones y el ONI (El Niño / La Niña), ambos rezagados igual que las "
-            "covariables aguas arriba. Se evalúa en los mismos 24 cortes, así que "
-            "la diferencia mide cuánto aportan esas variables. `delta_mae` = MAE B "
-            "− MAE A en metros (negativo: la etapa B mejora); `rel_mae` de cada "
-            "etapa se calcula contra el Naive de esa misma etapa. Las semillas se "
-            "promedian. Celdas vacías: esa etapa no se ha ejecutado."
-        )
-        st.dataframe(
-            comparison,
-            hide_index=True,
-            column_config={
-                c: st.column_config.NumberColumn(c, format="%.4f")
-                for c in comparison.columns
-                if c not in ("unique_id", "model")
-            },
-        )
-
 with tab_window:
     if not models:
         missing_predictions()
@@ -310,7 +261,11 @@ with tab_window:
             "Corte", cuts, index=len(cuts) - 1, format_func=str, key="w_cutoff"
         )
         options = sorted(forecasts["model"].unique())
-        preferred = [m for m in options if m in ("Naive", "XGBoost") or "media" in m]
+        preferred = [
+            model
+            for model in options
+            if model in ("naive", "booster") or "media" in model
+        ]
         shown = st.multiselect(
             "Modelos", options, default=preferred or options[:3], key="w_models"
         )
@@ -331,26 +286,3 @@ with tab_window:
             "métricas antes de sacar conclusiones."
         )
         st.dataframe(window_mae, hide_index=True)
-
-with tab_imp:
-    path = stage_dir(root, "xgboost", stage) / "feature_importance.parquet"
-    importance = cached_optional(str(path), _mtime(path))
-    if importance is None:
-        st.info(
-            f"No hay importancia de variables de XGBoost para la etapa {stage}. "
-            "Genérela con:"
-        )
-        st.code(data.run_command("xgboost", stage), language="bash")
-    else:
-        st.markdown(
-            "Las 15 variables que más reducen el error en los árboles de XGBoost "
-            "(ganancia relativa, suma 100 % entre todas). Nombres: `lagN` es la "
-            "serie objetivo N días antes (XGBoost modela el cambio diario del "
-            "nivel, `target_differences: [1]`); `rolling_mean_lag1_window_sizeK` es "
-            "su media móvil de K días hasta ayer; `sin_k`/`cos_k` son términos de "
-            "Fourier del ciclo anual (época del año); `<estación>_lagN` es el nivel "
-            "de una estación aguas arriba N días antes (N ≥ 14 para no usar datos "
-            "posteriores al corte). Importancia no es causalidad: variables "
-            "correlacionadas se reparten la ganancia."
-        )
-        st.altair_chart(charts.importance_chart(importance), width="stretch")

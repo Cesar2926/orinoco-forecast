@@ -58,8 +58,6 @@ def test_registry_resolves_aliases() -> None:
     assert get_runner("lstm").name == "nsmt"
     assert get_runner("timefm3").name == "timesfm3"
     assert get_runner("timesfm").name == "timesfm3"
-    # Legacy keys keep returning the already-tested classes.
-    assert get_runner("xgboost").name == "xgboost"
     assert get_runner("tcn").name == "tcn"
 
 

@@ -46,8 +46,8 @@ El plan se apoya en tres principios:
 | Estaciones aguas arriba | Ayacucho y Caicara; para Palúa también Ciudad Bolívar, como covariables **históricas** | Una crecida en Ayacucho llega días después a Ciudad Bolívar y desde allí a Palúa. Solo se usa su pasado. |
 | Función de pérdida | MAE | Coincide con la métrica de selección; optimizar una métrica y elegir con otra es incoherente. |
 | Escalado | `robust` (mediana y rango intercuartil) en las redes | Las crecidas son valores extremos legítimos que distorsionan un escalado por media y desviación estándar. |
-| Ventanas de validación | `n_windows=24`, `step_size=30`, todas antes de `test_start = 2023-01-01` | En `neuralforecast` el `step_size` vale 1 por defecto ([core](https://nixtlaverse.nixtla.io/neuralforecast/core.html)); debe fijarse en las tres librerías para que las ventanas coincidan. |
-| Ajuste de hiperparámetros | Mismo presupuesto para todos: unas 20 configuraciones por modelo con Optuna, evaluadas en validación | Si un modelo recibe muchos más intentos que otro, la comparación mide el esfuerzo de ajuste, no el modelo. |
+| Ventanas de validación | Un corte antes de `test_start = 2023-01-01`, horizonte `1..14` (default 14) | La ruta de runners ejecuta un corte y valida el segmento siguiente; el backtest multi-ventana anterior fue retirado. |
+| Longitud de entrada | `input_length=28` | Ventana compartida de `build_windows` para los modelos supervisados. |
 | Semillas | 3 semillas por red neuronal; se reporta media ± desviación | Las redes varían con la inicialización; con una sola semilla una diferencia de pocos centímetros puede ser azar. |
 
 ### Longitud de la ventana de entrada

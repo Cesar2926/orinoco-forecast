@@ -1,1 +1,1 @@
-"""Tree ensembles: XGBoost via mlforecast (``tree.XGBoostRunner``)."""
+"""Tree ensembles: XGBoost via mlforecast (``tree.BoosterRunner``)."""

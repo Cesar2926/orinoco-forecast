@@ -1,1 +1,1 @@
-"""Evaluation metrics and backtesting interfaces."""
+"""Evaluation metrics, statistics and runner validation."""

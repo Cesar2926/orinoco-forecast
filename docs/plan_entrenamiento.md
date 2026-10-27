@@ -1,5 +1,10 @@
 # Plan para entrenar los modelos
 
+> **Documento histórico.** El protocolo multi-ventana y los comandos con `--stage`
+> describen el pipeline anterior. La ruta actual es `scripts/run_model.py <runner>
+> --against <runner>` con un solo corte y salidas en
+> `data/predictions/<runner>/{predictions,statistics}.parquet`.
+
 ## Objetivo
 
 Predecir los niveles diarios de `ciudad_bolivar` y `palua` a 14 días, usando el

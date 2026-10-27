@@ -278,35 +278,28 @@ El test final no se consulta hasta que la elección está cerrada. Si después d
 cambia el modelo, el test deja de medir el desempeño real y el resultado reportado vuelve a
 estar sesgado.
 
-### Validación cruzada con origen móvil (*rolling origin*)
+### Ejecución de un corte y validación
 
 Las series temporales no se pueden dividir al azar: un *k-fold* aleatorio entrenaría con el
-futuro y evaluaría con el pasado. Dentro del bloque de validación se usa **origen móvil con
-ventana expandida**:
+futuro y evaluaría con el pasado. La ruta de runners usa un corte cronológico:
 
 1. Se elige un punto de corte (`cutoff`) en el pasado.
-2. El modelo se entrena solo con los datos anteriores al corte.
-3. Predice los 14 días siguientes y se compara con lo observado.
-4. El corte avanza `step_size` días y se repite el proceso `n_windows` veces.
+2. El runner se ajusta solo con los datos anteriores al corte.
+3. Predice los 1..14 días siguientes y se compara con lo observado.
 
 ```text
-ventana 1:  [========== entrenamiento ==========][14 días test]
-ventana 2:  [============= entrenamiento =============][14 días test]
-ventana 3:  [================ entrenamiento ================][14 días test]
-                                                    ... avanza 30 días cada vez
+[========== entrenamiento ==========][1..14 días de validación]
 ```
 
 | Parámetro | Valor | Significado |
 |---|---|---|
-| `horizon` (`h`) | 14 | Días que se pronostican desde cada corte. |
-| `step_size` | 30 | Días que avanza el corte entre ventanas. |
-| `n_windows` | 24 | Número de cortes evaluados (unos dos años de pronósticos), todos anteriores a `test_start`. |
+| `horizon` (`h`) | 14 | Días que se pronostican desde el corte (1..14). |
+| `input_length` | 28 | Días de contexto de cada ventana supervisada. |
 | `test_start` | 2023-01-01 | Primer día del test final; desde aquí hasta 2025-02-24 queda reservado. |
+| `seasonality` | 365 | Período de SeasonalNaive y escala del MASE. |
 
 Estos valores viven únicamente en `configs/backtest.yaml` y los comparten todos los
-modelos. La ruta nueva de runners ejecuta **un solo corte** y valida los 14 días
-siguientes; `n_windows`, `step_size` y `refit` quedan para el backtest legacy y el ajuste
-de hiperparámetros.
+runners. El corte por defecto es `test_start - (horizon + 1)`.
 
 ### Métricas
 
@@ -315,7 +308,7 @@ de hiperparámetros.
 | MAE | Error absoluto medio, en metros. | Más bajo es mejor. |
 | RMSE | Raíz del error cuadrático medio, en metros. | Penaliza más los errores grandes (crecidas mal predichas). |
 | MASE | MAE de cada día del horizonte `h` escalado por el error de la persistencia a `h` días en entrenamiento. | Menor que 1 significa que el modelo supera a la persistencia. |
-| MAE relativo (`rel_mae`) | MAE del modelo dividido por el MAE de la persistencia (Naive) en las mismas ventanas de validación. | Menor que 1 significa que el modelo supera a la persistencia en ese período; es el requisito mínimo de selección. |
+| MAE relativo (`rel_mae`) | MAE del modelo dividido por el MAE del runner de comparación (Naive por defecto) en el mismo corte. | Menor que 1 significa que el modelo supera a la persistencia en ese período; es el requisito mínimo de selección. |
 | NSE | Eficiencia de Nash-Sutcliffe, estándar en hidrología. | 1 es perfecto; 0 equivale a predecir la media; negativo es peor que la media. |
 | KGE | Eficiencia de Kling-Gupta: combina correlación, sesgo y variabilidad. | 1 es perfecto. |
 
@@ -329,15 +322,15 @@ El criterio se fija antes de ver los resultados. Si se define después, siempre 
 uno que favorezca al modelo preferido.
 
 1. **Requisito mínimo:** el modelo debe superar a la persistencia en **cada estación por
-   separado**, sobre el bloque de validación: MAE relativo a la persistencia (MAE del
-   modelo / MAE de Naive en las mismas ventanas de validación) < 1. Al ser un cociente sin
+   separado**, sobre el corte de validación: MAE relativo a la persistencia (MAE del
+   modelo / MAE de Naive en el mismo corte) < 1. Al ser un cociente sin
    unidades, este control impide que Ciudad Bolívar, con niveles mayores, domine la
    elección. No se usa MASE < 1 porque su escala viene del historial de entrenamiento y
    no del período evaluado: la propia persistencia obtiene MASE = 1,16 en Palúa en
    2021–2022, así que el umbral dependería de cuán difícil fue la validación respecto
    al historial. Si ningún modelo lo cumple, ese es el resultado principal del proyecto.
 2. **Métrica principal:** MAE promedio de `h = 1` a `14`, promediado entre Ciudad Bolívar y
-   Palúa, sobre las ventanas de validación.
+   Palúa, sobre el corte de validación.
 3. **Desempate**, si dos modelos quedan a pocos centímetros, en este orden:
    - menor error en los días 10 a 14, el tramo que realmente exige el problema;
    - menor error durante crecidas;
@@ -454,8 +447,8 @@ reproduce leyendo sus YAML.
 - **`configs/data.yaml`**: cada fuente declara `name`, `path`, `format`, `date_column`,
   `target_column`, `freq` y, si aplica, `sheet`, `covariates` o `layout`. Para agregar una
   fuente nueva se coloca el archivo original en `data/raw/` y se registra aquí.
-- **`configs/backtest.yaml`**: única fuente de `horizon`, `step_size`, `n_windows` y `test_start`. Ningún
-  modelo define su propio horizonte.
+- **`configs/backtest.yaml`**: única fuente de `horizon`, `input_length`, `test_start` y
+  `seasonality`. Ningún runner define su propio horizonte.
 - **`configs/models/*.yaml`**: hiperparámetros de cada familia (por ejemplo `input_size`,
   `max_steps` y covariables para las redes; `lags` y parámetros de XGBoost para los
   árboles).
@@ -544,30 +537,21 @@ result.write()  # data/predictions/<runner>/predictions.parquet
 
 ### Dashboard
 
-El tablero de Streamlit sigue leyendo el formato **legacy** de validación cruzada
-(`data/predictions/<modelo>/stage_<A|B>/{cv,metrics}.parquet`). La migración del tablero a
-`predictions.parquet`/`statistics.parquet` es un trabajo posterior; la ruta nueva de
-runners no depende de él. Para el tablero legacy, las predicciones no se versionan y hay
-que generarlas por etapa:
+El tablero de Streamlit lee `data/predictions/<runner>/{predictions,statistics}.parquet`.
+Las predicciones no se versionan, así que primero hay que generarlas:
 
 ```bash
-uv run python scripts/run_model.py baselines --stage A
-uv run python scripts/run_model.py xgboost --stage A
-uv run python scripts/run_model.py tcn --stage A
-# Etapa B (lluvia y ONI): lo mismo con --stage B
+uv run python scripts/run_model.py arimax --against naive
+uv run python scripts/run_model.py booster --against naive
+uv run python scripts/run_model.py tcn --against naive
 uv run streamlit run app/dashboard.py   # o: make dashboard
 ```
-
-La barra lateral elige la etapa ("Etapa A: solo río" o "Etapa B: río + lluvia + ONI") y
-esa elección cambia todas las pestañas de modelos. La pestaña de validación incluye además
-una tabla de la etapa A frente a la B por modelo y estación.
 
 | Pestaña | Qué muestra |
 |---|---|
 | Datos | Nivel diario por estación y rango de fechas, con los días no `observed` coloreados por etiqueta de calidad y un conteo de etiquetas por estación. Si existe `data/processed/orinoco_exogenous.parquet`, también lluvia diaria y ONI. |
 | Validación de modelos | Métricas (h = 1..14) por estación y modelo, con `rel_mae < 1` marcado; media ± desviación entre semillas de las redes; tabla del criterio de selección y MAE por día de horizonte frente a Naive. |
 | Pronóstico por ventana | Para una estación y un corte de validación: 60 días observados antes del corte, los 14 posteriores y el pronóstico de cada modelo. La media de semillas se muestra solo como referencia visual. |
-| Importancia de variables | Las 15 variables con más ganancia en XGBoost, con la explicación de sus nombres. |
 
 Cada gráfico lleva encima una nota sobre qué representa y cómo leerlo. Si falta alguna
 predicción, el tablero muestra el comando exacto para generarla.
@@ -659,7 +643,7 @@ código entre notebooks.
 | Estadísticas de dos runners (`compute_statistics`) | Disponible |
 | LSTM, TFT (neuralforecast) | Solo estructura (`NotImplementedError`) |
 | TimesFM 3.0 | Solo estructura (`NotImplementedError`) |
-| Dashboard Streamlit | Disponible en formato legacy; migración a runners pendiente |
+| Dashboard Streamlit | Disponible sobre `predictions.parquet`/`statistics.parquet` |
 | Comparación en validación y selección del modelo final | En curso: XGBoost y TCN evaluados ([detalle](docs/modelos_arboles_cnn.md)) |
 | Evaluación del modelo elegido en el test final y reporte | Pendiente |
 | Ensamble de modelos | Fuera del alcance; experimento opcional |

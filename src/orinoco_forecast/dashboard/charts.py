@@ -77,7 +77,7 @@ def horizon_chart(errors: pl.DataFrame) -> alt.Chart:
             y=alt.Y("mae:Q", title="MAE (m)"),
             color=alt.Color("model:N", title="Modelo"),
             strokeDash=alt.condition(
-                alt.datum.model == "Naive", alt.value([6, 4]), alt.value([1, 0])
+                alt.datum.model == "naive", alt.value([6, 4]), alt.value([1, 0])
             ),
             tooltip=[
                 "model",
@@ -140,25 +140,6 @@ def forecast_chart(
     )
     return alt.layer(obs_line, obs_after, pred_lines, rule, label).properties(
         height=HEIGHT
-    )
-
-
-def importance_chart(importance: pl.DataFrame, top: int = 15) -> alt.Chart:
-    """Barras horizontales con las ``top`` variables de mayor ganancia."""
-    data = importance.sort("importance_gain", descending=True).head(top)
-    return (
-        alt.Chart(data)
-        .mark_bar()
-        .encode(
-            x=alt.X(
-                "importance_gain:Q",
-                title="Ganancia relativa",
-                axis=alt.Axis(format="%"),
-            ),
-            y=alt.Y("feature:N", title=None, sort="-x"),
-            tooltip=["feature", alt.Tooltip("importance_gain:Q", format=".3f")],
-        )
-        .properties(height=24 * data.height)
     )
 
 
