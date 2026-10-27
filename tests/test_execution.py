@@ -138,3 +138,20 @@ def test_clean_history_limits_period_and_fills_short_gaps() -> None:
     assert out["ds"].min() == date(2009, 1, 1)
     assert out["y"].null_count() == 0
     assert out["y"].to_list() == [3.0, 4.0, 5.0, 6.0]
+
+
+def test_clean_history_drops_rows_with_unavailable_lags() -> None:
+    from datetime import date, timedelta
+
+    from orinoco_forecast.evaluation.execution import clean_history
+
+    days = [date(2009, 1, 1) + timedelta(days=i) for i in range(4)]
+    frame = pl.DataFrame(
+        {
+            "unique_id": ["palua"] * 4,
+            "ds": days,
+            "y": [1.0, 2.0, 3.0, 4.0],
+            "oni_lag_30": [None, None, 0.1, 0.1],
+        }
+    )
+    assert clean_history(frame)["ds"].min() == days[2]

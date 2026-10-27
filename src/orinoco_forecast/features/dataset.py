@@ -92,6 +92,8 @@ def clean_history(frame: pl.DataFrame) -> pl.DataFrame:
     Same cleaning as ``build_model_frame``: the period comes from
     ``model_frame.start/end`` in ``configs/data.yaml``, flat runs become nulls
     and gaps up to ``max_gap_days`` are interpolated. Covariate columns are kept.
+    Rows whose precomputed lag columns are still null (the first days of 2009,
+    before the longest lag is available) are dropped: nothing is invented.
     """
     config = load_config()
     settings = config["model_frame"]
@@ -100,7 +102,7 @@ def clean_history(frame: pl.DataFrame) -> pl.DataFrame:
     frame = frame.filter(pl.col("ds").is_between(start, end)).sort("unique_id", "ds")
     labelled = label_quality(frame, thresholds=config["quality"])
     cleaned = clean_series(labelled, settings["max_gap_days"])
-    return cleaned.drop("quality")
+    return cleaned.drop("quality").drop_nulls()
 
 
 def fourier_terms(ds: pl.Series, period: float = 365.25, k: int = 3) -> pl.DataFrame:
