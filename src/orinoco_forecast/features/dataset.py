@@ -86,6 +86,23 @@ def clean_series(df: pl.DataFrame, max_gap_days: int) -> pl.DataFrame:
     return out.with_columns(y=pl.col("_y")).drop("_run", "_gap", "_y")
 
 
+def clean_history(frame: pl.DataFrame) -> pl.DataFrame:
+    """Restrict to the valid period and clean levels (flat runs, short gaps).
+
+    Same cleaning as ``build_model_frame``: the period comes from
+    ``model_frame.start/end`` in ``configs/data.yaml``, flat runs become nulls
+    and gaps up to ``max_gap_days`` are interpolated. Covariate columns are kept.
+    """
+    config = load_config()
+    settings = config["model_frame"]
+    start = date.fromisoformat(str(settings["start"]))
+    end = date.fromisoformat(str(settings["end"]))
+    frame = frame.filter(pl.col("ds").is_between(start, end)).sort("unique_id", "ds")
+    labelled = label_quality(frame, thresholds=config["quality"])
+    cleaned = clean_series(labelled, settings["max_gap_days"])
+    return cleaned.drop("quality")
+
+
 def fourier_terms(ds: pl.Series, period: float = 365.25, k: int = 3) -> pl.DataFrame:
     """Términos ``sin_j, cos_j = sin/cos(2·π·j·t / period)``, ``j = 1..k``.
 

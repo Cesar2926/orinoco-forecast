@@ -15,11 +15,9 @@ from typing import Any
 import polars as pl
 
 from orinoco_forecast.data.datasets import TimeSeriesDataset
-from orinoco_forecast.data.loading import load_config
-from orinoco_forecast.data.quality import label_quality
 from orinoco_forecast.data.windows import build_windows
-from orinoco_forecast.features.dataset import clean_series
 from orinoco_forecast.evaluation.metrics import StatisticsResult, compute_statistics
+from orinoco_forecast.features.dataset import clean_history
 from orinoco_forecast.models.base import (
     DEFAULT_HORIZON,
     PredictionResult,
@@ -53,23 +51,6 @@ class ExecutionResult:
             self.baseline.write(),
             self.statistics.write(),
         )
-
-
-def clean_history(frame: pl.DataFrame) -> pl.DataFrame:
-    """Restrict to the valid period and clean levels (flat runs, short gaps).
-
-    Same cleaning as ``build_model_frame``: the period comes from
-    ``model_frame.start/end`` in ``configs/data.yaml``, flat runs become nulls
-    and gaps up to ``max_gap_days`` are interpolated. Covariate columns are kept.
-    """
-    config = load_config()
-    settings = config["model_frame"]
-    start = date.fromisoformat(str(settings["start"]))
-    end = date.fromisoformat(str(settings["end"]))
-    frame = frame.filter(pl.col("ds").is_between(start, end)).sort("unique_id", "ds")
-    labelled = label_quality(frame, thresholds=config["quality"])
-    cleaned = clean_series(labelled, settings["max_gap_days"])
-    return cleaned.drop("quality")
 
 
 def load_history(path: str | Path | None = None) -> pl.DataFrame:
