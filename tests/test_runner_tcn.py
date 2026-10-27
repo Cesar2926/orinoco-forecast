@@ -96,9 +96,7 @@ def test_tcn_predict_before_fit_fails() -> None:
 def test_tcn_rejects_invalid_horizons() -> None:
     frame = _synthetic()
     with pytest.raises(ValueError, match="horizonte"):
-        TCNRunner(_tiny_params()).fit(
-            _windows(frame), frame, cutoff=CUTOFF, horizon=0
-        )
+        TCNRunner(_tiny_params()).fit(_windows(frame), frame, cutoff=CUTOFF, horizon=0)
 
 
 def test_tcn_difference_transform_returns_levels() -> None:

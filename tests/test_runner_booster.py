@@ -50,9 +50,7 @@ def _windows(frame: pl.DataFrame) -> pl.DataFrame:
 
 def test_booster_returns_a_long_prediction_frame() -> None:
     frame = _synthetic()
-    runner = _tiny_runner().fit(
-        _windows(frame), frame, cutoff=CUTOFF, horizon=HORIZON
-    )
+    runner = _tiny_runner().fit(_windows(frame), frame, cutoff=CUTOFF, horizon=HORIZON)
 
     result = runner.predict(frame, cutoff=CUTOFF, horizon=HORIZON)
 
@@ -66,10 +64,7 @@ def test_booster_returns_a_long_prediction_frame() -> None:
 def test_booster_ignores_values_after_the_cutoff() -> None:
     frame = _synthetic()
     tampered = frame.with_columns(
-        pl.when(pl.col("ds") > CUTOFF)
-        .then(1e9)
-        .otherwise(pl.col("y"))
-        .alias("y")
+        pl.when(pl.col("ds") > CUTOFF).then(1e9).otherwise(pl.col("y")).alias("y")
     )
     base = _tiny_runner().fit(_windows(frame), frame, cutoff=CUTOFF, horizon=HORIZON)
     other = _tiny_runner().fit(

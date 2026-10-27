@@ -21,9 +21,7 @@ from orinoco_forecast.models.base import (
 def load_transformer_config(path: str | Path | None = None) -> dict[str, Any]:
     """Read ``configs/models/transformer.yaml`` (or ``path``)."""
     path = (
-        Path(path)
-        if path
-        else repo_root() / "configs" / "models" / "transformer.yaml"
+        Path(path) if path else repo_root() / "configs" / "models" / "transformer.yaml"
     )
     with path.open(encoding="utf-8") as handle:
         return yaml.safe_load(handle)

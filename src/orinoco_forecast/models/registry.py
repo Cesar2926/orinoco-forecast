@@ -156,6 +156,4 @@ def get_runner(name: str) -> Runner | ForecastRunner:
     legacy = _legacy_runner(name)
     if legacy is not None:
         return legacy
-    raise KeyError(
-        f"Modelo no registrado: {name!r}. Opciones: {available_runners()}."
-    )
+    raise KeyError(f"Modelo no registrado: {name!r}. Opciones: {available_runners()}.")

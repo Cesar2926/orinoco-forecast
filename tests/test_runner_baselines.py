@@ -44,9 +44,7 @@ def _windows(frame: pl.DataFrame, *, horizon: int = 3) -> pl.DataFrame:
 
 def test_naive_runner_returns_one_forecast_per_step_and_station() -> None:
     frame = _series()
-    runner = NaiveRunner().fit(
-        _windows(frame), frame, cutoff=CUTOFF, horizon=3
-    )
+    runner = NaiveRunner().fit(_windows(frame), frame, cutoff=CUTOFF, horizon=3)
 
     result = runner.predict(frame, cutoff=CUTOFF, horizon=3)
 
@@ -133,9 +131,7 @@ def test_runner_rejects_invalid_horizons() -> None:
     frame = _series()
     for invalid in (0, 15):
         with pytest.raises(ValueError, match="horizonte"):
-            NaiveRunner().fit(
-                _windows(frame), frame, cutoff=CUTOFF, horizon=invalid
-            )
+            NaiveRunner().fit(_windows(frame), frame, cutoff=CUTOFF, horizon=invalid)
 
 
 def test_runner_rejects_empty_training_windows() -> None:

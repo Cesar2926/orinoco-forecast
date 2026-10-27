@@ -67,9 +67,7 @@ def test_prediction_result_accepts_a_full_grid() -> None:
 
 def test_prediction_result_rejects_missing_columns() -> None:
     with pytest.raises(ValueError, match="columnas"):
-        PredictionResult.from_frame(
-            _frame().drop("y_pred"), runner="naive", horizon=14
-        )
+        PredictionResult.from_frame(_frame().drop("y_pred"), runner="naive", horizon=14)
 
 
 def test_prediction_result_rejects_unknown_horizon_steps() -> None:
@@ -116,9 +114,7 @@ def test_prediction_result_rejects_null_or_non_finite_values() -> None:
 
 
 def test_prediction_result_requires_one_cutoff() -> None:
-    other = _frame().with_columns(
-        pl.lit(CUTOFF + timedelta(days=1)).alias("cutoff")
-    )
+    other = _frame().with_columns(pl.lit(CUTOFF + timedelta(days=1)).alias("cutoff"))
     frame = pl.concat([_frame(), other])
     with pytest.raises(ValueError, match="Un solo corte"):
         PredictionResult.from_frame(frame, runner="naive", horizon=14)

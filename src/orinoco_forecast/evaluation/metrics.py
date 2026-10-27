@@ -335,9 +335,7 @@ class StatisticsResult:
             raise ValueError(f"Faltan columnas de estadísticas: {missing}.")
         if self.frame.is_empty():
             raise ValueError("Las estadísticas no pueden estar vacías.")
-        object.__setattr__(
-            self, "frame", self.frame.select(*STATISTICS_COLUMNS)
-        )
+        object.__setattr__(self, "frame", self.frame.select(*STATISTICS_COLUMNS))
 
     def write(self, path: str | Path | None = None) -> Path:
         """Write ``data/predictions/<runner>/statistics.parquet`` by default."""
@@ -356,9 +354,9 @@ def _wide_predictions(
     data = prediction.frame
     if aggregate_seeds and len(models) > 1:
         column = name or f"{prediction.runner}_mean"
-        data = data.group_by(
-            "unique_id", "cutoff", "ds", "horizon_step"
-        ).agg(pl.col("y_pred").mean())
+        data = data.group_by("unique_id", "cutoff", "ds", "horizon_step").agg(
+            pl.col("y_pred").mean()
+        )
         data = data.with_columns(pl.lit(column).alias("model"))
     elif name is not None:
         data = data.with_columns(pl.lit(name).alias("model"))
@@ -391,9 +389,7 @@ def compute_statistics(
         )
     first_models = first.frame["model"].unique().sort().to_list()
     second_models = second.frame["model"].unique().sort().to_list()
-    reference = (
-        second_models[0] if len(second_models) == 1 else f"{second.runner}_mean"
-    )
+    reference = second_models[0] if len(second_models) == 1 else f"{second.runner}_mean"
     if reference in first_models:
         reference = f"{reference}__baseline"
 

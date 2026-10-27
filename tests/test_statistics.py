@@ -72,9 +72,7 @@ def test_statistics_score_both_runners_and_rel_mae() -> None:
     first = _result({"arimax": [11.0, 21.0, 31.0]}, runner="arimax")
     second = _result({"naive": [12.0, 22.0, 32.0]}, runner="naive")
 
-    stats = compute_statistics(
-        first, second, observed=_observed(), history=_history()
-    )
+    stats = compute_statistics(first, second, observed=_observed(), history=_history())
 
     assert isinstance(stats, StatisticsResult)
     assert stats.runner == "arimax"
@@ -93,8 +91,7 @@ def test_statistics_score_both_runners_and_rel_mae() -> None:
         "against",
     ]
     rows = {
-        (row["model"], row["horizon"]): row
-        for row in stats.frame.iter_rows(named=True)
+        (row["model"], row["horizon"]): row for row in stats.frame.iter_rows(named=True)
     }
     assert rows[("arimax", "1")]["mae"] == pytest.approx(1.0)
     assert rows[("arimax", "1")]["rel_mae"] == pytest.approx(0.5)
@@ -113,13 +110,10 @@ def test_statistics_average_the_baseline_across_seeds() -> None:
     )
     second = _result({"naive": [12.0, 22.0, 32.0]}, runner="naive")
 
-    stats = compute_statistics(
-        first, second, observed=_observed(), history=_history()
-    )
+    stats = compute_statistics(first, second, observed=_observed(), history=_history())
 
     rows = {
-        (row["model"], row["horizon"]): row
-        for row in stats.frame.iter_rows(named=True)
+        (row["model"], row["horizon"]): row for row in stats.frame.iter_rows(named=True)
     }
     assert rows[("naive", "all")]["rel_mae"] == pytest.approx(1.0)
     assert rows[("tcn_s1", "all")]["mae"] == pytest.approx(1.0)
@@ -146,9 +140,7 @@ def test_statistics_write_uses_the_runner_folder(
 ) -> None:
     first = _result({"arimax": [11.0, 21.0, 31.0]}, runner="arimax")
     second = _result({"naive": [12.0, 22.0, 32.0]}, runner="naive")
-    stats = compute_statistics(
-        first, second, observed=_observed(), history=_history()
-    )
+    stats = compute_statistics(first, second, observed=_observed(), history=_history())
     monkeypatch.setattr(
         "orinoco_forecast.evaluation.metrics.predictions_dir", lambda: tmp_path
     )

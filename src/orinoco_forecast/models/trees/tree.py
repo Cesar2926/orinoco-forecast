@@ -272,9 +272,7 @@ class BoosterRunner(XGBoostRunner):
                 f"mlforecast devolvió columnas inesperadas: {value_columns}."
             )
         history = frame.filter(pl.col("ds") <= cutoff)
-        index = forecast_index(
-            history, model=self.name, cutoff=cutoff, horizon=horizon
-        )
+        index = forecast_index(history, model=self.name, cutoff=cutoff, horizon=horizon)
         predictions = index.join(
             raw.select(
                 "unique_id",

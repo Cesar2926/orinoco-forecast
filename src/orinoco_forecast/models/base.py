@@ -49,13 +49,10 @@ def validate_horizon(horizon: int) -> int:
     """Validate a forecast horizon in ``1..MAX_HORIZON`` (default 14)."""
     if isinstance(horizon, bool) or not isinstance(horizon, int):
         raise ValueError(
-            "El horizonte debe ser un entero entre 1 y "
-            f"{MAX_HORIZON}: {horizon!r}."
+            f"El horizonte debe ser un entero entre 1 y {MAX_HORIZON}: {horizon!r}."
         )
     if not 1 <= horizon <= MAX_HORIZON:
-        raise ValueError(
-            f"El horizonte debe estar entre 1 y {MAX_HORIZON}: {horizon}."
-        )
+        raise ValueError(f"El horizonte debe estar entre 1 y {MAX_HORIZON}: {horizon}.")
     return horizon
 
 
@@ -80,9 +77,7 @@ def validate_windows(windows: pl.DataFrame, *, horizon: int) -> pl.DataFrame:
 
 def validate_runner_name(runner: str) -> str:
     if not isinstance(runner, str) or not RUNNER_NAME_PATTERN.fullmatch(runner):
-        raise ValueError(
-            f"runner inválido: {runner!r}; usa minúsculas, números y '_'."
-        )
+        raise ValueError(f"runner inválido: {runner!r}; usa minúsculas, números y '_'.")
     return runner
 
 

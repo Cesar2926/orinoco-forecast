@@ -20,9 +20,7 @@ from orinoco_forecast.models.base import (
 
 def load_timesfm_config(path: str | Path | None = None) -> dict[str, Any]:
     """Read ``configs/models/timesfm.yaml`` (or ``path``)."""
-    path = (
-        Path(path) if path else repo_root() / "configs" / "models" / "timesfm.yaml"
-    )
+    path = Path(path) if path else repo_root() / "configs" / "models" / "timesfm.yaml"
     with path.open(encoding="utf-8") as handle:
         return yaml.safe_load(handle)
 

@@ -200,17 +200,13 @@ class TCNRunner:
             load_config()["model_frame"]["fourier_period"],
             load_config()["model_frame"]["fourier_k"],
         )
-        future = (
-            calendar.join(
-                frame.select("unique_id").unique(), how="cross"
-            )
-            .select("unique_id", "ds", *self._futr)
+        future = calendar.join(frame.select("unique_id").unique(), how="cross").select(
+            "unique_id", "ds", *self._futr
         )
         missing = [column for column in self._futr if column not in future.columns]
         if missing:
             raise ValueError(
-                "No se pudieron construir las covariables futuras del TCN: "
-                f"{missing}."
+                f"No se pudieron construir las covariables futuras del TCN: {missing}."
             )
         return future.select("unique_id", "ds", *self._futr)
 
@@ -280,8 +276,7 @@ class TCNRunner:
                 .sort("unique_id", "ds")
                 .with_columns(
                     (
-                        pl.col("_y_cut")
-                        + pl.col(column).cum_sum().over("unique_id")
+                        pl.col("_y_cut") + pl.col(column).cum_sum().over("unique_id")
                     ).alias(column)
                     for column in self.model_columns
                 )
