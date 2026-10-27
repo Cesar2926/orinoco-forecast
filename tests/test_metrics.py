@@ -56,6 +56,16 @@ def test_mase_horizon_requires_history_longer_than_season() -> None:
         mase_horizon(Y, Y, [1.0, 2.0], season=2)
 
 
+def test_nse_is_nan_with_one_point_or_constant_observations() -> None:
+    assert math.isnan(nse([1.0], [1.0]))
+    assert math.isnan(nse([2.0, 2.0], [2.0, 2.0]))
+
+
+def test_kge_is_nan_with_one_point_or_constant_observations() -> None:
+    assert math.isnan(kge([1.0], [1.0]))
+    assert math.isnan(kge([2.0, 2.0], [2.0, 2.0]))
+
+
 def test_kge_bias_and_variability() -> None:
     # pred = y + 1: r = 1, alpha = 1, beta = 3.5 / 2.5 = 1.4
     assert kge(Y, [v + 1 for v in Y]) == pytest.approx(0.6)

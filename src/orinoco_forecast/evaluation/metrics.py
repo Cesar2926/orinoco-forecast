@@ -183,19 +183,28 @@ def mase_horizon(
 def nse(y_true: ArrayLike, y_pred: ArrayLike) -> float:
     """Nash-Sutcliffe: ``1 - SSE / SS`` alrededor de la media de ``y_true``.
 
-    1 es perfecto, 0 equivale a predecir la media observada.
+    1 es perfecto, 0 equivale a predecir la media observada. Es NaN con un solo
+    punto o una serie constante: la eficiencia no está definida.
     """
     t, p = _pair(y_true, y_pred)
-    return float(1.0 - np.sum((t - p) ** 2) / np.sum((t - t.mean()) ** 2))
+    if t.size < 2:
+        return float("nan")
+    denominator = float(np.sum((t - t.mean()) ** 2))
+    if denominator == 0:
+        return float("nan")
+    return float(1.0 - np.sum((t - p) ** 2) / denominator)
 
 
 def kge(y_true: ArrayLike, y_pred: ArrayLike) -> float:
     """Kling-Gupta (Gupta et al., 2009): ``1 - sqrt((r-1)² + (α-1)² + (β-1)²)``.
 
     ``r`` es la correlación de Pearson, ``α = σ_sim / σ_obs`` y
-    ``β = μ_sim / μ_obs``. Es NaN si alguna serie es constante.
+    ``β = μ_sim / μ_obs``. Es NaN si la observación es constante, tiene media
+    cero o hay un solo punto.
     """
     t, p = _pair(y_true, y_pred)
+    if t.size < 2 or t.std() == 0 or t.mean() == 0:
+        return float("nan")
     with np.errstate(invalid="ignore", divide="ignore"):
         r = np.corrcoef(t, p)[0, 1]
         alpha = p.std() / t.std()

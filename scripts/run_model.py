@@ -1,107 +1,99 @@
-"""Run the shared cross-validation for one registered model.
+"""Run one model and compare it with a baseline runner on a single cutoff.
 
-Usage: ``uv run python scripts/run_model.py <model> [--stage A|B] [--final-test]
-[--max-steps N]``.
-Writes data/predictions/<model>/stage_<A|B>/cv.parquet and metrics.parquet, plus
-feature_importance.parquet for runners that expose ``feature_importance``.
-Prints ``rel_mae`` (MAE / Naive MAE) against the baselines of the SAME stage,
-which must be run first, and a mean ± std row across seeds for neural models
-(columns ``<model>_s<seed>``).
+Usage: ``uv run python scripts/run_model.py <model> [--against <runner>]
+[--cutoff YYYY-MM-DD] [--horizon N] [--write-dataset]``.
+
+The runner only fits and predicts. Predictions and statistics are written to
+``data/predictions/<runner>/`` and a separate script can revalidate them. The
+default comparison runner is ``naive`` and the default cutoff is the last one
+whose 14-day validation ends before ``test_start``.
 """
 
 import argparse
-import math
+from datetime import date
 
 import polars as pl
 
-from orinoco_forecast.evaluation.backtest import (
-    BASELINES,
-    load_backtest_config,
-    predictions_dir,
-    run_cv,
-    stage_baseline_metrics,
-    stage_dir,
-)
-from orinoco_forecast.evaluation.metrics import relative_to_baseline
-from orinoco_forecast.features.dataset import build_model_frame
-from orinoco_forecast.models.registry import RUNNERS, get_runner
-
-SEED_SUMMARY = ("mae", "rel_mae", "mase", "nse", "kge")
+from orinoco_forecast.data.datasets import TimeSeriesDataset
+from orinoco_forecast.evaluation.execution import execute
+from orinoco_forecast.models.registry import available_runners, get_runner
 
 
-def seed_summary(summary: pl.DataFrame) -> pl.DataFrame | None:
-    """Media ± desviación entre semillas para columnas ``<modelo>_s<semilla>``."""
-    family = pl.col("model").str.extract(r"^(.+)_s\d+$")
-    seeded = summary.with_columns(family=family).drop_nulls("family")
-    if seeded.is_empty():
-        return None
-    cols = [c for c in SEED_SUMMARY if c in seeded.columns]
+def _date(value: str) -> date:
+    try:
+        return date.fromisoformat(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(
+            f"fecha inválida {value!r}; usa YYYY-MM-DD."
+        ) from error
 
-    def fmt(mean: float, std: float | None) -> str:
-        std = 0.0 if std is None or math.isnan(std) else std
-        return f"{mean:.4f} ± {std:.4f}"
 
-    rows = []
-    for (uid, fam), part in seeded.group_by("unique_id", "family"):
-        row = {"unique_id": uid, "model": fam, "seeds": part.height}
-        row |= {c: fmt(part[c].mean(), part[c].std()) for c in cols}
-        rows.append(row)
-    return pl.DataFrame(rows).sort("unique_id", "model")
+def _positive_int(value: str) -> int:
+    try:
+        number = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(f"entero inválido: {value!r}.") from error
+    if not 1 <= number <= 14:
+        raise argparse.ArgumentTypeError("el horizonte debe estar entre 1 y 14.")
+    return number
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("model", choices=sorted(RUNNERS))
-    parser.add_argument("--stage", choices=["A", "B"], default="A")
+    parser.add_argument("model", choices=available_runners())
     parser.add_argument(
-        "--final-test",
-        action="store_true",
-        help="Evalúa el bloque de test final (usar una sola vez).",
+        "--against",
+        default="naive",
+        choices=available_runners(),
+        help="Runner de comparación (baseline). Por defecto: naive.",
     )
     parser.add_argument(
-        "--max-steps",
+        "--cutoff",
+        type=_date,
+        help="Último día de entrenamiento (YYYY-MM-DD).",
+    )
+    parser.add_argument(
+        "--horizon",
+        type=_positive_int,
+        default=14,
+        help="Días a pronosticar, 1..14 (por defecto 14).",
+    )
+    parser.add_argument(
+        "--input-length",
         type=int,
-        help="Sobrescribe max_steps de un modelo neuronal (corridas rápidas).",
+        default=28,
+        help="Días de contexto de cada ventana supervisada (por defecto 28).",
+    )
+    parser.add_argument(
+        "--write-dataset",
+        action="store_true",
+        help="Regenera el Parquet del dataset antes de ejecutar.",
     )
     args = parser.parse_args()
-    if args.final_test:
-        print(
-            "ADVERTENCIA: se evaluará el bloque de test final. Úselo una sola vez, "
-            "con el modelo ya elegido; mirarlo para decidir es fuga de datos."
+
+    if args.model == args.against:
+        parser.error("El modelo y el runner de comparación deben ser distintos.")
+    for name in (args.model, args.against):
+        runner = get_runner(name)
+        if not getattr(runner, "implemented", True):
+            parser.error(
+                f"El runner {name!r} solo tiene estructura; "
+                "todavía no se puede ejecutar."
+            )
+
+    try:
+        if args.write_dataset:
+            TimeSeriesDataset().write_parquet()
+        result = execute(
+            args.model,
+            args.against,
+            cutoff=args.cutoff,
+            horizon=args.horizon,
+            input_length=args.input_length,
         )
+    except (FileNotFoundError, ValueError) as error:
+        parser.error(str(error))
 
-    root = predictions_dir()
-    baseline = None
-    if args.model != BASELINES:
-        # Fail before training: rel_mae needs the baselines of the same stage.
-        try:
-            baseline = stage_baseline_metrics(root, args.stage, args.final_test)
-        except FileNotFoundError as err:
-            parser.error(str(err))
-
-    cfg = load_backtest_config()
-    runner = get_runner(args.model)
-    if args.max_steps is not None:
-        params = getattr(runner, "params", {})
-        if "max_steps" not in params:
-            parser.error("--max-steps solo aplica a modelos neuronales.")
-        runner.params = {**params, "max_steps": args.max_steps}
-    frame = build_model_frame(args.stage)
-    cv, metrics = run_cv(
-        args.model, runner, frame, cfg, final_test=args.final_test, stage=args.stage
-    )
-
-    out = stage_dir(root, args.model, args.stage)
-    importance = None
-    # Fit on the development rows only; never on the final test run.
-    if hasattr(runner, "feature_importance") and not args.final_test:
-        importance = runner.feature_importance(frame, cfg)
-        importance.write_parquet(out / "feature_importance.parquet")
-
-    if baseline is not None:
-        metrics = relative_to_baseline(metrics, baseline)
-    summary = metrics.filter(pl.col("horizon") == "all").drop("horizon")
-    # ASCII borders: Windows consoles default to cp1252 and cannot encode box chars.
     with pl.Config(
         tbl_rows=-1,
         tbl_cols=-1,
@@ -111,17 +103,11 @@ def main() -> None:
         float_precision=4,
     ):
         print(
-            f"{args.model} (etapa {args.stage}): {cv['cutoff'].n_unique()} cortes, "
-            f"{cv.height} predicciones. Métricas h=1..{cfg['horizon']}:"
+            f"{args.model} vs {args.against}: corte {result.cutoff}, "
+            f"horizonte {result.horizon}, "
+            f"{result.prediction.frame.height} predicciones."
         )
-        print(summary)
-        seeds = seed_summary(summary)
-        if seeds is not None:
-            print("Media ± desviación estándar entre semillas (h=1..14):")
-            print(seeds)
-        if importance is not None:
-            print("Importancia por ganancia (top 10):")
-            print(importance.head(10))
+        print(result.statistics.frame)
 
 
 if __name__ == "__main__":
