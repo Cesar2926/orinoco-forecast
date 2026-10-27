@@ -119,3 +119,22 @@ def test_execute_rejects_structure_only_runners_before_loading_data() -> None:
 def test_load_history_reports_a_missing_parquet(tmp_path: Path) -> None:
     with pytest.raises(FileNotFoundError, match="Parquet"):
         load_history(tmp_path / "missing.parquet")
+
+
+def test_clean_history_limits_period_and_fills_short_gaps() -> None:
+    from datetime import date, timedelta
+
+    from orinoco_forecast.evaluation.execution import clean_history
+
+    days = [date(2008, 12, 30) + timedelta(days=i) for i in range(6)]
+    frame = pl.DataFrame(
+        {
+            "unique_id": ["palua"] * 6,
+            "ds": days,
+            "y": [1.0, 2.0, 3.0, None, 5.0, 6.0],
+        }
+    )
+    out = clean_history(frame)
+    assert out["ds"].min() == date(2009, 1, 1)
+    assert out["y"].null_count() == 0
+    assert out["y"].to_list() == [3.0, 4.0, 5.0, 6.0]
