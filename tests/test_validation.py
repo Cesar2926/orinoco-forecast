@@ -1,111 +1,146 @@
-"""Tests for validate_processed_dataset: structural errors raise, quality warns."""
+"""Validation script: recompute statistics from exported predictions."""
 
-import warnings
 from datetime import date, timedelta
 from pathlib import Path
 
 import polars as pl
 import pytest
 
-from orinoco_forecast.data.loading import DataQualityWarning
-from orinoco_forecast.data.validation import (
-    PROCESSED_SCHEMA,
-    validate_processed_dataset,
-)
+from orinoco_forecast.evaluation.validation import read_predictions, validate_predictions
+from orinoco_forecast.models.base import PredictionResult
 
-CONFIG = {"targets": ["ciudad_bolivar", "palua"]}
-START = date(2000, 1, 1)
-
-
-def _frame(days: int = 5) -> pl.DataFrame:
-    rows = []
-    for uid in ("ciudad_bolivar", "palua"):
-        for i in range(days):
-            rows.append(
-                {
-                    "unique_id": uid,
-                    "ds": START + timedelta(days=i),
-                    "y": 5.0 + i,
-                    "rain_ayacucho": 1.0,
-                    "rain_caicara": 1.0,
-                    "rain_ciudad_bolivar": 1.0,
-                    "rain_palua": 1.0,
-                    "oni": 0.1,
-                }
-            )
-    return pl.DataFrame(rows, schema=PROCESSED_SCHEMA)
+CUTOFF = date(2022, 6, 1)
+HORIZON = 3
+STATIONS = ("ciudad_bolivar", "palua")
+SCHEMA = {
+    "model": pl.String,
+    "unique_id": pl.String,
+    "cutoff": pl.Date,
+    "ds": pl.Date,
+    "horizon_step": pl.Int32,
+    "y_pred": pl.Float64,
+}
 
 
-def _write(tmp_path: Path, frame: pl.DataFrame) -> Path:
-    path = tmp_path / "processed.parquet"
-    frame.write_parquet(path)
-    return path
-
-
-def _validate(path: Path) -> pl.DataFrame:
-    return validate_processed_dataset(path, CONFIG)
-
-
-def test_valid_frame_passes_unchanged(tmp_path: Path) -> None:
-    frame = _frame()
-    with warnings.catch_warnings():
-        warnings.simplefilter("error", DataQualityWarning)
-        out = _validate(_write(tmp_path, frame))
-    assert out.equals(frame)
-
-
-def test_missing_file_raises(tmp_path: Path) -> None:
-    with pytest.raises(FileNotFoundError):
-        _validate(tmp_path / "absent.parquet")
-
-
-def test_missing_column_raises(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="Faltan columnas"):
-        _validate(_write(tmp_path, _frame().drop("oni")))
-
-
-def test_wrong_type_raises(tmp_path: Path) -> None:
-    frame = _frame().with_columns(pl.col("oni").cast(pl.Float32))
-    with pytest.raises(ValueError, match="Esquema incorrecto"):
-        _validate(_write(tmp_path, frame))
-
-
-def test_missing_target_raises(tmp_path: Path) -> None:
-    frame = _frame().filter(pl.col("unique_id") != "palua")
-    with pytest.raises(ValueError, match="Faltan targets"):
-        _validate(_write(tmp_path, frame))
-
-
-def test_duplicates_warn(tmp_path: Path) -> None:
-    frame = _frame()
-    frame = pl.concat([frame, frame.head(1)]).sort("unique_id", "ds")
-    with pytest.warns(DataQualityWarning, match="duplicadas"):
-        _validate(_write(tmp_path, frame))
-
-
-def test_unsorted_warns(tmp_path: Path) -> None:
-    frame = _frame().reverse()
-    with pytest.warns(DataQualityWarning, match="no está ordenado"):
-        _validate(_write(tmp_path, frame))
-
-
-def test_missing_days_warn(tmp_path: Path) -> None:
-    frame = _frame().filter(pl.col("ds") != START + timedelta(days=2))
-    with pytest.warns(DataQualityWarning, match="días ausentes"):
-        _validate(_write(tmp_path, frame))
-
-
-def test_null_target_warns(tmp_path: Path) -> None:
-    frame = _frame().with_columns(
-        pl.when(pl.col("ds") == START).then(None).otherwise(pl.col("y")).alias("y")
+def _frame() -> pl.DataFrame:
+    start = CUTOFF - timedelta(days=20)
+    dates = pl.date_range(start, CUTOFF + timedelta(days=10), "1d", eager=True)
+    return pl.concat(
+        pl.DataFrame({"unique_id": station, "ds": dates}).with_columns(
+            y=10.0 + offset + pl.int_range(pl.len()).cast(pl.Float64)
+        )
+        for offset, station in enumerate(STATIONS)
     )
-    with pytest.warns(DataQualityWarning, match="valores nulos en y"):
-        _validate(_write(tmp_path, frame))
 
 
-def test_null_covariate_warns(tmp_path: Path) -> None:
-    frame = _frame().with_columns(
-        pl.when(pl.col("ds") == START).then(None).otherwise(pl.col("oni")).alias("oni")
+def _result(model: str, *, bias: float, horizon: int = HORIZON) -> PredictionResult:
+    frame = _frame()
+    observed = frame.filter(
+        pl.col("ds").is_between(
+            CUTOFF + timedelta(days=1), CUTOFF + timedelta(days=horizon)
+        )
     )
-    with pytest.warns(DataQualityWarning, match="oni: .* nulos en la covariable"):
-        _validate(_write(tmp_path, frame))
+    rows = [
+        {
+            "model": model,
+            "unique_id": row["unique_id"],
+            "cutoff": CUTOFF,
+            "ds": row["ds"],
+            "horizon_step": (row["ds"] - CUTOFF).days,
+            "y_pred": row["y"] + bias,
+        }
+        for row in observed.iter_rows(named=True)
+    ]
+    return PredictionResult.from_frame(
+        pl.DataFrame(rows, schema=SCHEMA), runner=model, horizon=horizon
+    )
+
+
+def _write(root: Path, model: str, *, bias: float, horizon: int = HORIZON) -> None:
+    (root / model).mkdir(parents=True, exist_ok=True)
+    _result(model, bias=bias, horizon=horizon).write(root / model / "predictions.parquet")
+
+
+def test_validate_predictions_reads_exports_and_writes_statistics(
+    tmp_path: Path,
+) -> None:
+    _write(tmp_path, "arimax", bias=1.0)
+    _write(tmp_path, "naive", bias=2.0)
+
+    statistics = validate_predictions(
+        "arimax",
+        "naive",
+        root=tmp_path,
+        frame=_frame(),
+        cutoff=CUTOFF,
+    )
+
+    assert statistics.runner == "arimax"
+    assert statistics.against == "naive"
+    assert (tmp_path / "arimax" / "statistics.parquet").is_file()
+    rows = {
+        (row["model"], row["horizon"]): row
+        for row in statistics.frame.iter_rows(named=True)
+    }
+    assert rows[("arimax", "all")]["mae"] == pytest.approx(1.0)
+    assert rows[("naive", "all")]["mae"] == pytest.approx(2.0)
+    assert rows[("arimax", "all")]["rel_mae"] == pytest.approx(0.5)
+
+
+def test_validate_predictions_requires_both_files(tmp_path: Path) -> None:
+    _write(tmp_path, "arimax", bias=1.0)
+    with pytest.raises(FileNotFoundError, match="predicciones"):
+        validate_predictions(
+            "arimax",
+            "naive",
+            root=tmp_path,
+            frame=_frame(),
+            cutoff=CUTOFF,
+        )
+
+
+def test_validate_predictions_rejects_a_different_cutoff(tmp_path: Path) -> None:
+    _write(tmp_path, "arimax", bias=1.0)
+    _write(tmp_path, "naive", bias=2.0)
+    with pytest.raises(ValueError, match="corte"):
+        validate_predictions(
+            "arimax",
+            "naive",
+            root=tmp_path,
+            frame=_frame(),
+            cutoff=CUTOFF - timedelta(days=1),
+        )
+
+
+def test_validate_predictions_rejects_incomplete_observations(tmp_path: Path) -> None:
+    _write(tmp_path, "arimax", bias=1.0)
+    _write(tmp_path, "naive", bias=2.0)
+    frame = _frame().filter(pl.col("ds") <= CUTOFF + timedelta(days=1))
+    with pytest.raises(ValueError, match="segmento de validación"):
+        validate_predictions(
+            "arimax",
+            "naive",
+            root=tmp_path,
+            frame=frame,
+            cutoff=CUTOFF,
+        )
+
+
+def test_validate_predictions_rejects_different_horizons(tmp_path: Path) -> None:
+    _write(tmp_path, "arimax", bias=1.0, horizon=HORIZON)
+    _write(tmp_path, "naive", bias=2.0, horizon=HORIZON - 1)
+    with pytest.raises(ValueError, match="horizontes"):
+        validate_predictions(
+            "arimax",
+            "naive",
+            root=tmp_path,
+            frame=_frame(),
+            cutoff=CUTOFF,
+        )
+
+
+def test_read_predictions_infers_the_horizon(tmp_path: Path) -> None:
+    _write(tmp_path, "arimax", bias=1.0)
+    result = read_predictions(tmp_path / "arimax" / "predictions.parquet", "arimax")
+    assert result.horizon == HORIZON
+    assert result.frame.height == 2 * HORIZON
