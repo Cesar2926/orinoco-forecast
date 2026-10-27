@@ -16,9 +16,9 @@ Objective: evaluate a model and its comparison runner (the baseline) on the same
 ## Tasks
 
 - T1 — Protocol config, walk-forward splits builder and the evaluation import cycle. Route: inline. Commit: `577c257`. Evidence: 7 backtest tests plus the 24 existing evaluation tests pass; `build_splits` reads one station calendar, guards `default_cutoff` and target coverage.
-- T2 — `run_backtest` over the existing `run_runners` path plus `BacktestResult`. Route: inline. Status: done; 17 backtest tests pass, including fresh-runner-per-fold, future-data invariance and the missing-fold guards.
-- T3 — `summarize_comparison` aggregation and sign test. Route: inline.
-- T4 — Backtest persistence and the `--folds` CLI. Route: inline.
+- T2 — `run_backtest` over the existing `run_runners` path plus `BacktestResult`. Route: inline. Commit: `082e49a`. Evidence: 17 backtest tests pass, including fresh-runner-per-fold, future-data invariance and the missing-fold guards.
+- T3 — `summarize_comparison` aggregation and sign test. Route: inline. Status: done; hand-computed mean/std/improvement, ties, zero baseline and unpaired folds covered.
+- T4 — Backtest persistence and the `--folds` CLI. Route: inline. Status: done; `write` keeps `predictions.parquet`/`statistics.parquet` untouched and the CLI rejects `--folds --cutoff`. T3 and T4 share one work unit (24 backtest tests).
 - T5 — Documentation. Route: inline.
 - T6 — Full suite, lint and real-data smoke run. Route: inline.
 

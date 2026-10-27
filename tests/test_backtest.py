@@ -13,9 +13,12 @@ from polars.testing import assert_frame_equal
 
 from orinoco_forecast.data.splits import WalkForwardSplit
 from orinoco_forecast.evaluation.backtest import (
+    BACKTEST_STATISTICS_COLUMNS,
     BacktestResult,
     build_splits,
+    execute_backtest,
     run_backtest,
+    summarize_comparison,
 )
 from orinoco_forecast.models.registry import get_runner
 from orinoco_forecast.models.statistical.baselines import (
@@ -42,6 +45,9 @@ def _protocol_frame(
     return pl.concat(
         pl.DataFrame({"unique_id": station, "ds": dates}).with_columns(
             y=50.0 + offset + 0.01 * index,
+            rain_ciudad_bolivar=1.0 + index % 7,
+            rain_palua=2.0 + index % 5,
+            oni=0.1,
         )
         for offset, station in enumerate(STATIONS)
         if station in stations
@@ -361,3 +367,216 @@ def test_backtest_result_rejects_predictions_beyond_the_last_fold() -> None:
 
     with pytest.raises(ValueError, match="validación"):
         replace(result, predictions=beyond)
+
+
+STATISTICS_SCHEMA = {
+    "fold": pl.Int32,
+    "cutoff": pl.Date,
+    "unique_id": pl.String,
+    "model": pl.String,
+    "horizon": pl.String,
+    "n": pl.Int64,
+    "mae": pl.Float64,
+    "rmse": pl.Float64,
+    "mase": pl.Float64,
+    "nse": pl.Float64,
+    "kge": pl.Float64,
+    "rel_mae": pl.Float64,
+    "against": pl.String,
+}
+
+
+def _fold_row(
+    fold: int,
+    model: str,
+    *,
+    mae: float,
+    rmse: float,
+    horizon: str = "all",
+    unique_id: str = "ciudad_bolivar",
+    against: str = "naive",
+) -> dict[str, object]:
+    return {
+        "fold": fold,
+        "cutoff": CUTOFF + timedelta(days=fold),
+        "unique_id": unique_id,
+        "model": model,
+        "horizon": horizon,
+        "n": HORIZON,
+        "mae": mae,
+        "rmse": rmse,
+        "mase": 1.0,
+        "nse": 0.5,
+        "kge": 0.5,
+        "rel_mae": 1.0 if model == against else mae / 2.0,
+        "against": against,
+    }
+
+
+def _fold_statistics(
+    rows: list[tuple[int, str, float, float]],
+) -> pl.DataFrame:
+    return pl.DataFrame(
+        [_fold_row(fold, model, mae=mae, rmse=rmse) for fold, model, mae, rmse in rows],
+        schema=STATISTICS_SCHEMA,
+    ).select(*BACKTEST_STATISTICS_COLUMNS)
+
+
+def test_summarize_comparison_reports_mean_and_dispersion() -> None:
+    statistics = _fold_statistics(
+        [
+            (1, "arimax", 1.0, 1.0),
+            (1, "naive", 2.0, 3.0),
+            (2, "arimax", 3.0, 3.0),
+            (2, "naive", 2.0, 3.0),
+        ]
+    )
+
+    comparison = summarize_comparison(statistics)
+
+    assert set(comparison["metric"]) == {"mae", "rmse"}
+    row = comparison.filter(
+        (pl.col("metric") == "mae") & (pl.col("horizon") == "all")
+    ).row(0, named=True)
+    assert row["model"] == "arimax"
+    assert row["against"] == "naive"
+    assert row["n_folds"] == 2
+    assert row["n_improvement"] == 2
+    assert row["mean_model"] == pytest.approx(2.0)
+    assert row["std_model"] == pytest.approx(2**0.5)
+    assert row["mean_baseline"] == pytest.approx(2.0)
+    assert row["std_baseline"] == 0.0
+    assert row["mean_diff"] == 0.0
+    assert row["std_diff"] == pytest.approx(2**0.5)
+    assert row["mean_improvement_pct"] == 0.0
+    assert row["std_improvement_pct"] == pytest.approx(70.7106781)
+    assert row["min_improvement_pct"] == pytest.approx(-50.0)
+    assert row["max_improvement_pct"] == pytest.approx(50.0)
+    assert (row["wins"], row["ties"], row["losses"]) == (1, 0, 1)
+    assert row["win_rate"] == pytest.approx(0.5)
+    assert row["sign_test_p"] == pytest.approx(1.0)
+
+
+def test_summarize_comparison_handles_ties_and_a_zero_baseline() -> None:
+    statistics = _fold_statistics(
+        [
+            (1, "arimax", 0.0, 0.0),
+            (1, "naive", 0.0, 0.0),
+            (2, "arimax", 1.0, 1.0),
+            (2, "naive", 2.0, 2.0),
+        ]
+    )
+
+    row = (
+        summarize_comparison(statistics)
+        .filter((pl.col("metric") == "mae") & (pl.col("horizon") == "all"))
+        .row(0, named=True)
+    )
+
+    assert row["n_improvement"] == 1
+    assert row["mean_improvement_pct"] == pytest.approx(50.0)
+    assert row["min_improvement_pct"] == pytest.approx(50.0)
+    assert row["max_improvement_pct"] == pytest.approx(50.0)
+    assert (row["wins"], row["ties"], row["losses"]) == (1, 1, 0)
+    assert row["win_rate"] == pytest.approx(0.5)
+    assert row["sign_test_p"] == pytest.approx(1.0)
+
+
+def test_summarize_comparison_rejects_unpaired_folds() -> None:
+    statistics = _fold_statistics(
+        [
+            (1, "arimax", 1.0, 1.0),
+            (1, "naive", 2.0, 2.0),
+            (2, "arimax", 1.0, 1.0),
+        ]
+    )
+
+    with pytest.raises(ValueError, match="pliegue"):
+        summarize_comparison(statistics)
+
+
+def test_summarize_comparison_keeps_horizon_steps_and_all_last() -> None:
+    rows = [
+        _fold_row(1, model, mae=mae, rmse=2.0, horizon=step)
+        for step in ("1", "14", "all")
+        for model, mae in (("arimax", 1.0), ("naive", 2.0))
+    ]
+    statistics = pl.DataFrame(rows, schema=STATISTICS_SCHEMA).select(
+        *BACKTEST_STATISTICS_COLUMNS
+    )
+
+    comparison = summarize_comparison(statistics)
+
+    assert comparison.filter(pl.col("metric") == "mae")["horizon"].to_list() == [
+        "1",
+        "14",
+        "all",
+    ]
+
+
+def test_backtest_result_write_uses_the_backtest_folder(tmp_path: Path) -> None:
+    result = _result()
+    base = tmp_path / "naive" / "backtest" / "seasonal_naive"
+
+    written = result.write(tmp_path)
+
+    assert written == (
+        base / "fold_predictions.parquet",
+        base / "fold_statistics.parquet",
+        base / "comparison.parquet",
+    )
+    assert all(path.is_file() for path in written)
+    assert not (tmp_path / "naive" / "predictions.parquet").exists()
+    assert not (tmp_path / "naive" / "statistics.parquet").exists()
+    assert_frame_equal(
+        pl.read_parquet(written[2]), summarize_comparison(result.statistics)
+    )
+
+
+def test_execute_backtest_builds_the_configured_folds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = {
+        "horizon": HORIZON,
+        "input_length": 3,
+        "test_start": "2023-01-01",
+        "seasonality": 365,
+        "n_windows": 3,
+        "step_size": 30,
+    }
+    monkeypatch.setattr(
+        "orinoco_forecast.evaluation.backtest.load_backtest_config", lambda: config
+    )
+
+    result = execute_backtest(
+        "naive", "seasonal_naive", frame=_protocol_frame(), write=False
+    )
+
+    assert [split.cutoff for split in result.splits] == [
+        date(2022, 10, 29),
+        date(2022, 11, 28),
+        date(2022, 12, 28),
+    ]
+    assert result.predictions["fold"].n_unique() == 3
+    assert result.predictions["ds"].max() == date(2022, 12, 31)
+
+
+def test_cli_rejects_folds_together_with_a_cutoff() -> None:
+    root = Path(__file__).resolve().parents[1]
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(root / "scripts" / "run_model.py"),
+            "naive",
+            "--folds",
+            "--cutoff",
+            "2022-12-17",
+        ],
+        capture_output=True,
+        text=True,
+        cwd=root,
+        check=False,
+    )
+
+    assert completed.returncode == 2
+    assert "not allowed with" in completed.stderr

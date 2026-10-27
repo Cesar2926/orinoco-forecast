@@ -1,12 +1,14 @@
-"""Run one model and compare it with a baseline runner on a single cutoff.
+"""Run one model and compare it with a baseline runner.
 
 Usage: ``uv run python scripts/run_model.py <model> [--against <runner>]
-[--cutoff YYYY-MM-DD] [--horizon N] [--write-dataset]``.
+[--cutoff YYYY-MM-DD | --folds] [--horizon N] [--write-dataset]``.
 
 The runner only fits and predicts. Predictions and statistics are written to
 ``data/predictions/<runner>/`` and a separate script can revalidate them. The
 default comparison runner is ``naive`` and the default cutoff is the last one
-whose 14-day validation ends before ``test_start``.
+whose validation ends before ``test_start``. ``--folds`` runs every configured
+walk-forward fold and writes the comparison under
+``data/predictions/<runner>/backtest/<against>/``.
 """
 
 import argparse
@@ -15,7 +17,12 @@ from datetime import date
 import polars as pl
 
 from orinoco_forecast.data.datasets import TimeSeriesDataset
-from orinoco_forecast.evaluation.execution import execute
+from orinoco_forecast.evaluation.backtest import (
+    BacktestResult,
+    execute_backtest,
+    summarize_comparison,
+)
+from orinoco_forecast.evaluation.execution import ExecutionResult, execute
 from orinoco_forecast.models.registry import available_runners, get_runner
 
 
@@ -38,6 +45,43 @@ def _positive_int(value: str) -> int:
     return number
 
 
+def _table_config() -> pl.Config:
+    return pl.Config(
+        tbl_rows=-1,
+        tbl_cols=-1,
+        tbl_hide_dataframe_shape=True,
+        tbl_width_chars=200,
+        tbl_formatting="ASCII_FULL_CONDENSED",
+        float_precision=4,
+    )
+
+
+def _report_single(result: ExecutionResult) -> None:
+    with _table_config():
+        print(
+            f"{result.prediction.runner} vs {result.baseline.runner}: corte "
+            f"{result.cutoff}, horizonte {result.horizon}, "
+            f"{result.prediction.frame.height} predicciones."
+        )
+        print(result.statistics.frame)
+
+
+def _report_backtest(result: BacktestResult) -> None:
+    comparison = summarize_comparison(result.statistics).filter(
+        pl.col("horizon") == "all"
+    )
+    with _table_config():
+        print(
+            f"{result.model} vs {result.against}: {len(result.splits)} pliegues "
+            f"walk-forward, horizonte {result.horizon}."
+        )
+        print(
+            f"cortes: {result.splits[0].cutoff} .. {result.splits[-1].cutoff} "
+            f"(validación hasta {result.splits[-1].validation_end})."
+        )
+        print(comparison)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("model", choices=available_runners())
@@ -47,10 +91,16 @@ def main() -> None:
         choices=available_runners(),
         help="Runner de comparación (baseline). Por defecto: naive.",
     )
-    parser.add_argument(
+    selection = parser.add_mutually_exclusive_group()
+    selection.add_argument(
         "--cutoff",
         type=_date,
         help="Último día de entrenamiento (YYYY-MM-DD).",
+    )
+    selection.add_argument(
+        "--folds",
+        action="store_true",
+        help="Ejecuta todos los pliegues walk-forward de configs/backtest.yaml.",
     )
     parser.add_argument(
         "--horizon",
@@ -84,30 +134,28 @@ def main() -> None:
     try:
         if args.write_dataset:
             TimeSeriesDataset().write_parquet()
-        result = execute(
-            args.model,
-            args.against,
-            cutoff=args.cutoff,
-            horizon=args.horizon,
-            input_length=args.input_length,
-        )
+        if args.folds:
+            backtest = execute_backtest(
+                args.model,
+                args.against,
+                horizon=args.horizon,
+                input_length=args.input_length,
+            )
+        else:
+            single = execute(
+                args.model,
+                args.against,
+                cutoff=args.cutoff,
+                horizon=args.horizon,
+                input_length=args.input_length,
+            )
     except (FileNotFoundError, ValueError) as error:
         parser.error(str(error))
 
-    with pl.Config(
-        tbl_rows=-1,
-        tbl_cols=-1,
-        tbl_hide_dataframe_shape=True,
-        tbl_width_chars=200,
-        tbl_formatting="ASCII_FULL_CONDENSED",
-        float_precision=4,
-    ):
-        print(
-            f"{args.model} vs {args.against}: corte {result.cutoff}, "
-            f"horizonte {result.horizon}, "
-            f"{result.prediction.frame.height} predicciones."
-        )
-        print(result.statistics.frame)
+    if args.folds:
+        _report_backtest(backtest)
+    else:
+        _report_single(single)
 
 
 if __name__ == "__main__":
