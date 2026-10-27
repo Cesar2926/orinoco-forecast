@@ -2,8 +2,9 @@
 
 > **Documento histórico.** El protocolo multi-ventana y los comandos con `--stage`
 > describen el pipeline anterior. La ruta actual es `scripts/run_model.py <runner>
-> --against <runner>` con un solo corte y salidas en
-> `data/predictions/<runner>/{predictions,statistics}.parquet`.
+> --against <runner>` con un solo corte —o todos los pliegues walk-forward con
+> `--folds`— y salidas en `data/predictions/<runner>/{predictions,statistics}.parquet`
+> o `data/predictions/<runner>/backtest/<baseline>/`.
 
 ## Objetivo
 

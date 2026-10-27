@@ -297,9 +297,54 @@ futuro y evaluaría con el pasado. La ruta de runners usa un corte cronológico:
 | `input_length` | 28 | Días de contexto de cada ventana supervisada. |
 | `test_start` | 2023-01-01 | Primer día del test final; desde aquí hasta 2025-02-24 queda reservado. |
 | `seasonality` | 365 | Período de SeasonalNaive y escala del MASE. |
+| `n_windows` | 24 | Pliegues walk-forward que evalúa `--folds`. |
+| `step_size` | 30 | Días entre cortes consecutivos del barrido. |
 
 Estos valores viven únicamente en `configs/backtest.yaml` y los comparten todos los
 runners. El corte por defecto es `test_start - (horizon + 1)`.
+
+### Barrido walk-forward: modelo contra baseline en los mismos pliegues
+
+Un solo corte responde "¿cómo le fue en ese período?". El barrido responde "¿le gana
+al baseline de forma consistente?" y es la comparación que exige el criterio de
+selección:
+
+```bash
+uv run python scripts/run_model.py arimax --against naive --folds
+```
+
+- `configs/backtest.yaml` define **24 pliegues separados por 30 días**. El último
+  corte es `2022-12-17` (`test_start - (horizon + 1)`) y el primero `2021-01-26`.
+- En cada pliegue el modelo y el baseline se ajustan con el **mismo histórico**, las
+  **mismas ventanas supervisadas** y predicen el **mismo `cutoff`**; las métricas se
+  calculan solo sobre `cutoff + 1 .. cutoff + horizon`. La igualdad no es una
+  convención: ambos pasan por la misma función de ejecución.
+- Nada posterior a `2022-12-31` entra en el barrido. El bloque reservado
+  `2023-01-01 .. 2025-03-31` sigue sin usarse para elegir modelo.
+- La mejora de cada pliegue es
+  `100 * (error_baseline - error_modelo) / error_baseline`. Se agrega por estación,
+  modelo y paso del horizonte con media, desviación (`ddof = 1`), mínimo y máximo,
+  `wins`/`ties`/`losses`, `win_rate` y un test de signos exacto de dos colas
+  (`sign_test_p`). Un error de baseline igual a cero deja la mejora en nulo en lugar
+  de producir un infinito.
+- Solo `mae` y `rmse` se agregan entre pliegues porque comparten unidades. `mase`,
+  `nse` y `kge` quedan por pliegue en `fold_statistics.parquet`, porque su escala
+  depende de la dificultad de cada ventana y promediarlas mezclaría referencias
+  distintas.
+- Cómo leerlo: `mean_improvement_pct > 0` con `win_rate` alto y desviación baja indica
+  superioridad sistemática. `mean_improvement_pct > 0` con `win_rate ≈ 0.5` indica que
+  la ventaja viene de pocos pliegues, no de una mejora estable.
+
+Salidas (no se versionan):
+
+```text
+data/predictions/<modelo>/backtest/<baseline>/fold_predictions.parquet
+data/predictions/<modelo>/backtest/<baseline>/fold_statistics.parquet
+data/predictions/<modelo>/backtest/<baseline>/comparison.parquet
+```
+
+`predictions.parquet` y `statistics.parquet` conservan su esquema de un solo corte:
+el dashboard y `validate_predictions.py` los leen por nombre exacto.
 
 ### Métricas
 
@@ -495,6 +540,9 @@ métricas de validación cruzada ni conoce el test final; eso queda en módulos 
 # Ejecuta arimax y lo compara contra Naive en el último corte de validación.
 uv run python scripts/run_model.py arimax --against naive
 
+# Ejecuta los 24 pliegues walk-forward y agrega la comparación entre pliegues.
+uv run python scripts/run_model.py arimax --against naive --folds
+
 # Corte explícito y horizonte de 7 días.
 uv run python scripts/run_model.py arimax --against naive --cutoff 2022-12-17 --horizon 7
 
@@ -521,6 +569,10 @@ result.write()  # data/predictions/<runner>/predictions.parquet
   de los dos runners y `rel_mae = mae / mae_against`. Con un solo corte, NSE y KGE por
   paso quedan `NaN` porque hay una sola observación por estación y paso; la fila `all`
   (14 observaciones) sí es interpretable.
+- `--folds` escribe
+  `data/predictions/<runner>/backtest/<against>/{fold_predictions,fold_statistics,comparison}.parquet`
+  y no toca los dos archivos anteriores. `--folds` y `--cutoff` son mutuamente
+  excluyentes.
 - La etapa A/B de la comparación anterior queda fuera de esta ruta: siempre se usan lluvia
   y ONI.
 
@@ -636,11 +688,12 @@ código entre notebooks.
 | Extracción a formato largo con columna `quality` | Disponible |
 | Métricas MAE, RMSE, MASE (por horizonte y estacional), NSE, KGE, MAE relativo, sMAPE, MAPE | Disponible |
 | Baselines Naive y SeasonalNaive | Disponible |
-| ARIMA / ARIMAX (statsmodels) | Runner `arimax` implementado; comparación multi-ventana legacy en curso |
+| ARIMA / ARIMAX (statsmodels) | Runner `arimax` implementado; comparación walk-forward disponible |
 | XGBoost (mlforecast) | Runner `booster` implementado: devuelve solo la predicción |
 | TCN (neuralforecast) | Runner `tcn` implementado: devuelve solo la predicción |
 | Arquitectura de runners (`fit`/`predict`, `write`) | Disponible |
 | Estadísticas de dos runners (`compute_statistics`) | Disponible |
+| Comparación walk-forward modelo vs baseline (`--folds`) | Disponible: 24 pliegues, mejora, dispersión y test de signos |
 | LSTM, TFT (neuralforecast) | Solo estructura (`NotImplementedError`) |
 | TimesFM 3.0 | Solo estructura (`NotImplementedError`) |
 | Dashboard Streamlit | Disponible sobre `predictions.parquet`/`statistics.parquet` |

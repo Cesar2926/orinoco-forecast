@@ -19,8 +19,8 @@ Objective: evaluate a model and its comparison runner (the baseline) on the same
 - T2 — `run_backtest` over the existing `run_runners` path plus `BacktestResult`. Route: inline. Commit: `082e49a`. Evidence: 17 backtest tests pass, including fresh-runner-per-fold, future-data invariance and the missing-fold guards.
 - T3 — `summarize_comparison` aggregation and sign test. Route: inline. Status: done; hand-computed mean/std/improvement, ties, zero baseline and unpaired folds covered.
 - T4 — Backtest persistence and the `--folds` CLI. Route: inline. Status: done; `write` keeps `predictions.parquet`/`statistics.parquet` untouched and the CLI rejects `--folds --cutoff`. T3 and T4 share one work unit (24 backtest tests).
-- T5 — Documentation. Route: inline.
-- T6 — Full suite, lint and real-data smoke run. Route: inline.
+- T5 — Documentation. Route: inline. Status: done; README documents `--folds`, the fold protocol, the improvement formula, how to read `win_rate`/`sign_test_p` and the new artifacts; the historical plan banner points to the sweep.
+- T6 — Full suite, lint and real-data smoke run. Route: inline. Evidence: `uv run pytest` 242 passed, 2 skipped, 14 pre-existing `FileNotFoundError` errors for `data/raw/Niveles Orinoco.xlsx` (absent from this checkout and from `git ls-files`); `uv run ruff check .` clean. Smoke `naive --against seasonal_naive --folds`: 24 folds, 672 predictions, `n = 14` per fold and station, `max(ds) = 2022-12-31`, no null `y_true`. Smoke `arimax --against naive --folds` (about 3 min): `ciudad_bolivar` mean MAE improvement 37.84 % (20/24 wins, p = 0.0015) and `palua` 10.31 % (16/24 wins, p = 0.15). The single-cutoff `predictions.parquet`/`statistics.parquet` keep one cutoff and their schema.
 
 ## Log
 
