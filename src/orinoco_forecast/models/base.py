@@ -10,10 +10,19 @@ validación cruzada completa con el protocolo común de ``configs/backtest.yaml`
 
 from __future__ import annotations
 
+import re
+from dataclasses import dataclass
 from datetime import date
+from pathlib import Path
 from typing import Any, Protocol, Self
 
 import polars as pl
+
+from orinoco_forecast.utils.io import (
+    predictions_dir,
+    resolve_output_path,
+    write_parquet,
+)
 
 FORECAST_INDEX_COLUMNS = (
     "model",
@@ -31,6 +40,156 @@ PREDICTION_SCHEMA = {
     "horizon_step": pl.Int32,
     "y_pred": pl.Float64,
 }
+DEFAULT_HORIZON = 14
+MAX_HORIZON = 14
+RUNNER_NAME_PATTERN = re.compile(r"^[a-z0-9_]+$")
+
+
+def validate_horizon(horizon: int) -> int:
+    """Validate a forecast horizon in ``1..MAX_HORIZON`` (default 14)."""
+    if isinstance(horizon, bool) or not isinstance(horizon, int):
+        raise ValueError(
+            "El horizonte debe ser un entero entre 1 y "
+            f"{MAX_HORIZON}: {horizon!r}."
+        )
+    if not 1 <= horizon <= MAX_HORIZON:
+        raise ValueError(
+            f"El horizonte debe estar entre 1 y {MAX_HORIZON}: {horizon}."
+        )
+    return horizon
+
+
+def _validate_runner_name(runner: str) -> str:
+    if not isinstance(runner, str) or not RUNNER_NAME_PATTERN.fullmatch(runner):
+        raise ValueError(
+            f"runner inválido: {runner!r}; usa minúsculas, números y '_'."
+        )
+    return runner
+
+
+def _validated_predictions(
+    frame: pl.DataFrame, *, horizon: int, label: str = "predicciones"
+) -> pl.DataFrame:
+    """Validate and normalize a prediction frame to ``PREDICTION_COLUMNS``."""
+    missing = [column for column in PREDICTION_COLUMNS if column not in frame.columns]
+    if missing:
+        raise ValueError(f"Faltan columnas de {label}: {missing}.")
+    selected = frame.select(*PREDICTION_COLUMNS)
+    if selected.is_empty():
+        raise ValueError(f"Las {label} no pueden estar vacías.")
+    if selected.schema["cutoff"] != pl.Date:
+        raise ValueError(f"cutoff debe ser pl.Date, no {selected.schema['cutoff']}.")
+    if selected.schema["ds"] != pl.Date:
+        raise ValueError(f"ds debe ser pl.Date, no {selected.schema['ds']}.")
+    if not selected.schema["horizon_step"].is_integer():
+        raise ValueError(
+            f"horizon_step debe ser entero, no {selected.schema['horizon_step']}."
+        )
+    if not selected.schema["y_pred"].is_numeric():
+        raise ValueError(f"y_pred debe ser numérica, no {selected.schema['y_pred']}.")
+    if selected["model"].null_count() or selected["unique_id"].null_count():
+        raise ValueError("model y unique_id no pueden contener nulos.")
+    if selected["cutoff"].unique().len() != 1:
+        raise ValueError("Un solo corte por archivo de predicciones.")
+    steps = sorted(set(selected["horizon_step"].to_list()))
+    if steps != list(range(1, horizon + 1)):
+        raise ValueError(
+            f"Los pasos del horizonte deben ser 1..{horizon}; se recibieron {steps}."
+        )
+    mismatched = selected.filter(
+        (pl.col("ds") - pl.col("cutoff")).dt.total_days() != pl.col("horizon_step")
+    )
+    if mismatched.height:
+        raise ValueError(
+            f"{mismatched.height} filas tienen ds distinto de cutoff + horizon_step."
+        )
+    duplicates = selected.select(
+        pl.struct(["model", "unique_id", "horizon_step"]).is_duplicated().sum()
+    ).item()
+    if duplicates:
+        raise ValueError(
+            f"{duplicates} predicciones duplicadas por modelo, estación y paso."
+        )
+    if selected["y_pred"].null_count():
+        raise ValueError("y_pred no puede contener valores nulos.")
+    values = selected["y_pred"].cast(pl.Float64)
+    if not values.is_finite().all():
+        raise ValueError("y_pred debe contener solo valores finitos.")
+    return selected.with_columns(y_pred=values).sort(
+        "model", "unique_id", "horizon_step"
+    )
+
+
+class Writable(Protocol):
+    """Result object that can export itself to Parquet."""
+
+    def write(self, path: str | Path | None = None) -> Path:
+        """Write the result and return the written path."""
+        ...
+
+
+@dataclass(frozen=True)
+class PredictionResult:
+    """Runner output: one row per model column, station and horizon step."""
+
+    frame: pl.DataFrame
+    runner: str
+    horizon: int
+
+    def __post_init__(self) -> None:
+        validate_horizon(self.horizon)
+        _validate_runner_name(self.runner)
+        object.__setattr__(
+            self,
+            "frame",
+            _validated_predictions(self.frame, horizon=self.horizon),
+        )
+
+    @classmethod
+    def from_frame(
+        cls, frame: pl.DataFrame, *, runner: str, horizon: int = DEFAULT_HORIZON
+    ) -> Self:
+        """Validate ``frame`` and build a result tied to ``runner``."""
+        return cls(frame=frame, runner=runner, horizon=horizon)
+
+    def write(self, path: str | Path | None = None) -> Path:
+        """Write ``data/predictions/<runner>/predictions.parquet`` by default."""
+        default = predictions_dir() / self.runner / "predictions.parquet"
+        return write_parquet(self.frame, resolve_output_path(path, default))
+
+
+class Runner(Protocol):
+    """Model executor: fits, predicts and returns an exportable result.
+
+    ``frame`` must contain only observations with ``ds <= cutoff`` and
+    ``windows`` is the ``build_windows`` table for the same cutoff and horizon.
+    Statistical models may use the contiguous ``frame`` because their
+    formulation cannot be fitted from overlapping 28-day windows.
+    """
+
+    name: str
+    implemented: bool
+
+    def fit(
+        self,
+        windows: pl.DataFrame,
+        frame: pl.DataFrame,
+        *,
+        cutoff: date,
+        horizon: int = DEFAULT_HORIZON,
+    ) -> Self:
+        """Fit using the windows and the history up to ``cutoff``."""
+        ...
+
+    def predict(
+        self,
+        frame: pl.DataFrame,
+        *,
+        cutoff: date,
+        horizon: int = DEFAULT_HORIZON,
+    ) -> PredictionResult:
+        """Predict ``cutoff + 1 .. cutoff + horizon`` for every station."""
+        ...
 
 
 class Forecaster(Protocol):
