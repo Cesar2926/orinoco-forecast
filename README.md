@@ -525,7 +525,9 @@ result.write()  # data/predictions/<runner>/predictions.parquet
   `test_start - (horizon + 1)`, es decir `2022-12-17` para 14 días.
 - Las salidas no llevan etapa: `data/predictions/<runner>/predictions.parquet` y
   `data/predictions/<runner>/statistics.parquet`. El segundo archivo contiene las métricas
-  de los dos runners y `rel_mae = mae / mae_against`.
+  de los dos runners y `rel_mae = mae / mae_against`. Con un solo corte, NSE y KGE por
+  paso quedan `NaN` porque hay una sola observación por estación y paso; la fila `all`
+  (14 observaciones) sí es interpretable.
 - La etapa A/B de la comparación anterior queda fuera de esta ruta: siempre se usan lluvia
   y ONI.
 
