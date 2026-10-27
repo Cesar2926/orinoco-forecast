@@ -78,7 +78,7 @@ def validate_windows(windows: pl.DataFrame, *, horizon: int) -> pl.DataFrame:
     return windows
 
 
-def _validate_runner_name(runner: str) -> str:
+def validate_runner_name(runner: str) -> str:
     if not isinstance(runner, str) or not RUNNER_NAME_PATTERN.fullmatch(runner):
         raise ValueError(
             f"runner inválido: {runner!r}; usa minúsculas, números y '_'."
@@ -157,7 +157,7 @@ class PredictionResult:
 
     def __post_init__(self) -> None:
         validate_horizon(self.horizon)
-        _validate_runner_name(self.runner)
+        validate_runner_name(self.runner)
         object.__setattr__(
             self,
             "frame",

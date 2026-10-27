@@ -18,14 +18,32 @@ from __future__ import annotations
 
 import math
 from collections.abc import Sequence
+from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 import numpy.typing as npt
 import polars as pl
 
+from orinoco_forecast.models.base import PredictionResult, validate_runner_name
+from orinoco_forecast.utils.io import (
+    predictions_dir,
+    resolve_output_path,
+    write_parquet,
+)
+
 ArrayLike = npt.ArrayLike
 SeriesLike = pl.Series | Sequence[float]
 METRICS = ("mae", "rmse", "mase", "nse", "kge")
+STATISTICS_COLUMNS = (
+    "unique_id",
+    "model",
+    "horizon",
+    "n",
+    *METRICS,
+    "rel_mae",
+    "against",
+)
 
 
 def _as_series(values: SeriesLike, name: str) -> pl.Series:
@@ -288,3 +306,130 @@ def relative_to_baseline(
             "(distinto número de filas puntuadas)."
         )
     return out.drop("n_naive").with_columns(rel_mae=pl.col("mae") / pl.col("mae_naive"))
+
+
+@dataclass(frozen=True)
+class StatisticsResult:
+    """Comparison of two runner predictions against the validation segment."""
+
+    frame: pl.DataFrame
+    runner: str
+    against: str
+
+    def __post_init__(self) -> None:
+        validate_runner_name(self.runner)
+        validate_runner_name(self.against)
+        missing = [
+            column for column in STATISTICS_COLUMNS if column not in self.frame.columns
+        ]
+        if missing:
+            raise ValueError(f"Faltan columnas de estadísticas: {missing}.")
+        if self.frame.is_empty():
+            raise ValueError("Las estadísticas no pueden estar vacías.")
+        object.__setattr__(
+            self, "frame", self.frame.select(*STATISTICS_COLUMNS)
+        )
+
+    def write(self, path: str | Path | None = None) -> Path:
+        """Write ``data/predictions/<runner>/statistics.parquet`` by default."""
+        default = predictions_dir() / self.runner / "statistics.parquet"
+        return write_parquet(self.frame, resolve_output_path(path, default))
+
+
+def _wide_predictions(
+    prediction: PredictionResult,
+    *,
+    name: str | None = None,
+    aggregate_seeds: bool = False,
+) -> pl.DataFrame:
+    """Pivot a long prediction frame to one column per model (or one mean)."""
+    models = prediction.frame["model"].unique().sort().to_list()
+    data = prediction.frame
+    if aggregate_seeds and len(models) > 1:
+        column = name or f"{prediction.runner}_mean"
+        data = data.group_by(
+            "unique_id", "cutoff", "ds", "horizon_step"
+        ).agg(pl.col("y_pred").mean())
+        data = data.with_columns(pl.lit(column).alias("model"))
+    elif name is not None:
+        data = data.with_columns(pl.lit(name).alias("model"))
+    return data.pivot(
+        on="model",
+        index=["unique_id", "cutoff", "ds", "horizon_step"],
+        values="y_pred",
+    )
+
+
+def compute_statistics(
+    first: PredictionResult,
+    second: PredictionResult,
+    *,
+    observed: pl.DataFrame,
+    history: pl.DataFrame,
+    seasonality: int = 365,
+) -> StatisticsResult:
+    """Score two runner results on the same validation segment.
+
+    ``observed`` carries ``unique_id, ds, y`` for ``cutoff + 1 .. cutoff + h``;
+    ``history`` carries only observations up to the cutoff and is the MASE
+    scale. ``rel_mae`` is ``mae / mae_against``; the reference is averaged
+    across seeds when the comparison runner has several model columns.
+    """
+    if first.horizon != second.horizon:
+        raise ValueError(
+            f"Los runners tienen horizontes distintos: {first.horizon} y "
+            f"{second.horizon}."
+        )
+    first_models = first.frame["model"].unique().sort().to_list()
+    second_models = second.frame["model"].unique().sort().to_list()
+    reference = (
+        second_models[0] if len(second_models) == 1 else f"{second.runner}_mean"
+    )
+    if reference in first_models:
+        reference = f"{reference}__baseline"
+
+    left = _wide_predictions(first)
+    right = _wide_predictions(second, name=reference, aggregate_seeds=True)
+    keys = ["unique_id", "cutoff", "ds", "horizon_step"]
+    wide = left.join(right, on=keys, how="inner")
+    expected = min(left.height, right.height)
+    if wide.height != expected:
+        raise ValueError(
+            "Las predicciones de los dos runners no cubren la misma grilla "
+            f"({wide.height} filas comunes de {expected})."
+        )
+    truth = observed.select(
+        "unique_id",
+        "ds",
+        pl.col("y").cast(pl.Float64).alias("y"),
+    )
+    wide = wide.join(truth, on=["unique_id", "ds"], how="left")
+    if wide["y"].null_count() == wide.height:
+        raise ValueError(
+            "No hay observaciones del segmento de validación para comparar."
+        )
+
+    scored = evaluate_cv(wide, [*first_models, reference], history)
+    baseline_rows = scored.filter(pl.col("model") == reference)
+    model_rows = relative_to_baseline(
+        scored.filter(pl.col("model") != reference),
+        scored,
+        baseline_model=reference,
+    ).drop("mae_naive")
+    out = pl.concat(
+        [
+            model_rows,
+            baseline_rows.with_columns(rel_mae=pl.lit(1.0)),
+        ]
+    ).with_columns(against=pl.lit(second.runner))
+    order = (
+        pl.when(pl.col("horizon") == "all")
+        .then(999)
+        .otherwise(pl.col("horizon").cast(pl.Int32))
+    )
+    out = (
+        out.with_columns(_order=order)
+        .sort("unique_id", "model", "_order")
+        .drop("_order")
+    )
+    return StatisticsResult(frame=out, runner=first.runner, against=second.runner)
