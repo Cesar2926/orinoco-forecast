@@ -61,8 +61,8 @@ def main() -> None:
     parser.add_argument(
         "--input-length",
         type=int,
-        default=28,
-        help="Días de contexto de cada ventana supervisada (por defecto 28).",
+        default=None,
+        help="Días de contexto de cada ventana (por defecto configs/backtest.yaml).",
     )
     parser.add_argument(
         "--write-dataset",

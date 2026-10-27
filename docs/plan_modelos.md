@@ -14,6 +14,16 @@ El plan se apoya en tres principios:
    una ventana de 365 días.
 3. **Datos externos en una segunda etapa.** Así se puede medir cuánto aportan.
 
+> **Ejecución actual.** El camino de ejecución es
+> `scripts/run_model.py <runner> --against <runner>`: el runner solo ajusta, predice
+> entre 1 y 14 días (por defecto 14) y exporta
+> `data/predictions/<runner>/predictions.parquet`. `scripts/validate_predictions.py`
+> recalcula las estadísticas desde esos archivos contra el segmento de validación. Las
+> claves canónicas son `naive`, `seasonal_naive`, `arimax`, `booster`, `nsmt`,
+> `transformer`, `timesfm3` y `tcn`; Nsmt es el LSTM. La separación A/B descrita abajo se
+> conserva solo como referencia histórica del backtest legacy, no como etapa obligatoria
+> de la ruta nueva.
+
 ---
 
 ## Decisiones tomadas
@@ -219,13 +229,16 @@ que conviene muestrear ambos: Llanos y Meta por un lado, Caura y Ventuari por el
 El token es una credencial personal: nunca se escribe en el repositorio ni en una celda de
 notebook. En Colab se usa la sección *Secrets* del panel lateral.
 
-### Diseño en dos etapas
+### Diseño en dos etapas (histórico)
 
 1. **Etapa A, solo el río (1974–2025).** Los seis modelos y los baselines con covariables
    de estaciones y Fourier. Es la comparación principal y la base de la selección.
 2. **Etapa B, con datos externos (1981–2025).** Se agregan lluvia, GloFAS e índices
    climáticos. Los modelos sin datos externos se reevalúan sobre el mismo período 1981+
    para que la comparación sea justa; la diferencia mide cuánto aportan las fuentes.
+
+La ruta de runners ya no expone `--stage`: ejecuta siempre con lluvia y ONI. El diseño A/B
+queda como referencia del backtest anterior y de los resultados ya guardados.
 
 Si el tiempo no alcanza, la etapa B se ejecuta solo con los dos o tres mejores modelos de la
 etapa A, y el informe lo declara.

@@ -304,7 +304,9 @@ ventana 3:  [================ entrenamiento ================][14 días test]
 | `test_start` | 2023-01-01 | Primer día del test final; desde aquí hasta 2025-02-24 queda reservado. |
 
 Estos valores viven únicamente en `configs/backtest.yaml` y los comparten todos los
-modelos.
+modelos. La ruta nueva de runners ejecuta **un solo corte** y valida los 14 días
+siguientes; `n_windows`, `step_size` y `refit` quedan para el backtest legacy y el ajuste
+de hiperparámetros.
 
 ### Métricas
 
@@ -490,14 +492,61 @@ uv sync
 En Windows `make` no viene instalado; se pueden usar los comandos `uv` directamente o
 instalarlo con `choco install make` o `scoop install make`.
 
+### Runners: ejecución y exportación
+
+La ruta de ejecución nueva trata cada modelo como un **runner**: ajusta, predice entre 1 y
+14 días (por defecto 14) y devuelve un `PredictionResult` exportable. El runner no calcula
+métricas de validación cruzada ni conoce el test final; eso queda en módulos separados.
+
+```bash
+# Ejecuta arimax y lo compara contra Naive en el último corte de validación.
+uv run python scripts/run_model.py arimax --against naive
+
+# Corte explícito y horizonte de 7 días.
+uv run python scripts/run_model.py arimax --against naive --cutoff 2022-12-17 --horizon 7
+
+# Recalcula las estadísticas desde los parquet exportados, sin reentrenar.
+uv run python scripts/validate_predictions.py arimax --against naive
+```
+
+Contrato:
+
+```python
+runner.fit(windows, history, cutoff=cutoff, horizon=horizon)
+result = runner.predict(history, cutoff=cutoff, horizon=horizon)
+result.write()  # data/predictions/<runner>/predictions.parquet
+```
+
+- `windows` es la tabla de `build_windows` con `input_length=28` y las columnas `y`,
+  `rain_ciudad_bolivar`, `rain_palua` y `oni`. Los modelos estadísticos usan además el
+  histórico contiguo hasta el corte porque ARIMAX y SeasonalNaive no se pueden ajustar
+  desde ventanas solapadas de 28 días.
+- `--against` por defecto es `naive`. El corte por defecto es
+  `test_start - (horizon + 1)`, es decir `2022-12-17` para 14 días.
+- Las salidas no llevan etapa: `data/predictions/<runner>/predictions.parquet` y
+  `data/predictions/<runner>/statistics.parquet`. El segundo archivo contiene las métricas
+  de los dos runners y `rel_mae = mae / mae_against`.
+- La etapa A/B de la comparación anterior queda fuera de esta ruta: siempre se usan lluvia
+  y ONI.
+
+| Runner | Clave CLI | Estado |
+|---|---|---|
+| Naive | `naive` | Implementado |
+| SeasonalNaive | `seasonal_naive` | Implementado |
+| ARIMAX | `arimax` | Implementado (statsmodels) |
+| XGBoost | `booster` | Implementado (mlforecast) |
+| TCN | `tcn` | Implementado (neuralforecast) |
+| LSTM | `nsmt` | Solo estructura |
+| Transformer / TFT | `transformer` | Solo estructura |
+| TimesFM 3.0 | `timesfm3` | Solo estructura (extra `timesfm` opcional) |
+
 ### Dashboard
 
-Tablero de Streamlit para inspeccionar los datos y el comportamiento de los modelos. Es de
-solo lectura: no entrena modelos ni toca el bloque de test final; lee los niveles de
-`data/raw/` y las predicciones de validación de `data/predictions/<modelo>/stage_<A|B>/`.
-Esas predicciones no se versionan, así que primero hay que generarlas, por etapa (los
-baselines antes que el resto, porque `rel_mae` se calcula contra el Naive de la misma
-etapa y `run_model.py` se detiene si faltan):
+El tablero de Streamlit sigue leyendo el formato **legacy** de validación cruzada
+(`data/predictions/<modelo>/stage_<A|B>/{cv,metrics}.parquet`). La migración del tablero a
+`predictions.parquet`/`statistics.parquet` es un trabajo posterior; la ruta nueva de
+runners no depende de él. Para el tablero legacy, las predicciones no se versionan y hay
+que generarlas por etapa:
 
 ```bash
 uv run python scripts/run_model.py baselines --stage A
@@ -597,16 +646,18 @@ código entre notebooks.
 | Auditoría de datos crudos (`data/raw/README.md`) | Disponible |
 | Carga y validación de datos (`data/loading.py`) | Disponible |
 | Alineación de NASA POWER y ONI (`data/exogenous.py`) | Disponible |
-| Formato long y variables predictoras (`features/`) | Disponible (rezagos aguas arriba, lluvia, ONI y calendario) |
+| Formato long y variables predictoras (`features/`) | Disponible (rezagos de nivel y cambio diario; lluvia/ONI si la fuente las trae) |
 | Extracción a formato largo con columna `quality` | Disponible |
 | Métricas MAE, RMSE, MASE (por horizonte y estacional), NSE, KGE, MAE relativo, sMAPE, MAPE | Disponible |
 | Baselines Naive y SeasonalNaive | Disponible |
-| ARIMA / ARIMAX (statsmodels) | Implementado; comparación en las 24 ventanas pendiente |
-| XGBoost (mlforecast) | Disponible: ajustado y evaluado en etapas A y B |
-| TCN (neuralforecast) | Disponible: ajustado y evaluado en etapas A y B |
-| LSTM, TFT (neuralforecast) | Pendiente |
-| TimesFM 3.0 | Pendiente |
-| Dashboard Streamlit | Disponible |
+| ARIMA / ARIMAX (statsmodels) | Runner `arimax` implementado; comparación multi-ventana legacy en curso |
+| XGBoost (mlforecast) | Runner `booster` implementado: devuelve solo la predicción |
+| TCN (neuralforecast) | Runner `tcn` implementado: devuelve solo la predicción |
+| Arquitectura de runners (`fit`/`predict`, `write`) | Disponible |
+| Estadísticas de dos runners (`compute_statistics`) | Disponible |
+| LSTM, TFT (neuralforecast) | Solo estructura (`NotImplementedError`) |
+| TimesFM 3.0 | Solo estructura (`NotImplementedError`) |
+| Dashboard Streamlit | Disponible en formato legacy; migración a runners pendiente |
 | Comparación en validación y selección del modelo final | En curso: XGBoost y TCN evaluados ([detalle](docs/modelos_arboles_cnn.md)) |
 | Evaluación del modelo elegido en el test final y reporte | Pendiente |
 | Ensamble de modelos | Fuera del alcance; experimento opcional |
@@ -637,17 +688,21 @@ configuradas en `configs/data.yaml`:
 
 | Columna | Contenido |
 |---|---|
-| `<estacion>_lag_<n>` | Nivel de la estación desplazado `n` días; ARIMAX solo usa los de estaciones aguas arriba. |
-| `rain_<estacion>_lag_<n>` | Lluvia propia rezagada `n` días. |
-| `oni_lag_<n>` | ONI rezagado `n` días. |
-| `sin_doy`, `cos_doy` | Ciclo anual determinista (y armónicos opcionales). |
+| `ayacucho_lag_7`, `ayacucho_lag_14` | Nivel de Ayacucho en `t - n` (Caicara y Ciudad Bolívar/Palúa). |
+| `caicara_lag_4` | Nivel de Caicara en `t - 4` (Ciudad Bolívar/Palúa). |
+| `ciudad_bolivar_lag_1` | Nivel de Ciudad Bolívar en `t - 1` (Palúa). |
+| `d_ayacucho_lag_3`, `d_caicara_lag_3` | Cambio diario `y(t) - y(t - 1)` en `t - 3`. |
+| `d_ciudad_bolivar_lag_1` | Cambio diario de Ciudad Bolívar en `t - 1`. |
+| `rain_<estacion>_lag_<n>`, `oni_lag_<n>` | Solo si la fuente trae lluvia/ONI; el Excel de niveles no las incluye. |
 
-El orden aguas arriba se define una sola vez en `features.river_order`:
-`ayacucho → caicara → ciudad_bolivar → palua`. Para el horizonte de 14 días, ARIMAX
-selecciona solo rezagos `>= min_exog_lag` (14 por defecto), de modo que cada exógena
-futura ya está observada en el corte. Los rezagos propios menores que el horizonte
-quedan disponibles para otros modelos; en ARIMAX la inercia propia la aportan los
-términos AR.
+El conjunto exacto de rezagos por estación vive en `features.station_lags` y
+`features.diff_lags`. El calendario `sin_doy`/`cos_doy` está apagado
+(`calendar_terms: 0`). El orden aguas arriba se define una sola vez en
+`features.river_order`: `ayacucho → caicara → ciudad_bolivar → palua`. Para el
+horizonte de 14 días, ARIMAX selecciona solo rezagos `>= min_exog_lag` (14 por
+defecto), de modo que cada exógena futura ya está observada en el corte. Los
+rezagos de 1, 3, 4 y 7 días quedan disponibles para modelos supervisados; en
+ARIMAX la inercia propia la aportan los términos AR.
 
 ---
 

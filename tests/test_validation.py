@@ -6,7 +6,10 @@ from pathlib import Path
 import polars as pl
 import pytest
 
-from orinoco_forecast.evaluation.validation import read_predictions, validate_predictions
+from orinoco_forecast.evaluation.validation import (
+    read_predictions,
+    validate_predictions,
+)
 from orinoco_forecast.models.base import PredictionResult
 
 CUTOFF = date(2022, 6, 1)
@@ -58,7 +61,8 @@ def _result(model: str, *, bias: float, horizon: int = HORIZON) -> PredictionRes
 
 def _write(root: Path, model: str, *, bias: float, horizon: int = HORIZON) -> None:
     (root / model).mkdir(parents=True, exist_ok=True)
-    _result(model, bias=bias, horizon=horizon).write(root / model / "predictions.parquet")
+    destination = root / model / "predictions.parquet"
+    _result(model, bias=bias, horizon=horizon).write(destination)
 
 
 def test_validate_predictions_reads_exports_and_writes_statistics(

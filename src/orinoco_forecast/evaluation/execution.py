@@ -215,12 +215,17 @@ def execute(
     frame: pl.DataFrame | None = None,
     cutoff: date | None = None,
     horizon: int | None = None,
-    input_length: int = INPUT_LENGTH,
+    input_length: int | None = None,
     write: bool = True,
 ) -> ExecutionResult:
     """Run ``model`` against ``against`` with the shared protocol."""
     cfg = load_backtest_config()
     horizon = int(cfg["horizon"]) if horizon is None else validate_horizon(horizon)
+    input_length = (
+        int(cfg.get("input_length", INPUT_LENGTH))
+        if input_length is None
+        else input_length
+    )
     runner = _require_implemented(get_runner(model), "modelo")
     baseline = _require_implemented(get_runner(against), "comparación")
     data = load_history() if frame is None else frame

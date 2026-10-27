@@ -30,4 +30,7 @@ artifacts/
 
 # Model checkpoints are never committed, wherever they are written.
 *.pt
+
+# PyTorch Lightning logs from neuralforecast smoke/training runs.
+lightning_logs/
 .atl
