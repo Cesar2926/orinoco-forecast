@@ -20,9 +20,13 @@ from orinoco_forecast.features.lags import (
     upstream_of,
 )
 from orinoco_forecast.models.base import (
+    DEFAULT_HORIZON,
     PREDICTION_COLUMNS,
+    PredictionResult,
     forecast_index,
     prepare_history,
+    validate_horizon,
+    validate_windows,
 )
 
 
@@ -369,3 +373,65 @@ class ArimaForecaster:
         if predictions["y_pred"].null_count():
             raise RuntimeError("Faltan predicciones para algunas estaciones.")
         return predictions.select(PREDICTION_COLUMNS)
+
+
+class ArimaxRunner:
+    """ARIMAX como runner: envuelve ``ArimaForecaster`` y exporta predicciones.
+
+    ``windows`` se valida como entrada común, pero el ajuste usa el histórico
+    contiguo hasta ``cutoff`` porque ARIMAX no puede estimarse a partir de
+    ventanas solapadas de 28 días.
+    """
+
+    name = "arimax"
+    implemented = True
+
+    def __init__(self, engine: ArimaForecaster | None = None) -> None:
+        self._engine = engine or self._configured_engine()
+        self._fitted = False
+
+    @staticmethod
+    def _configured_engine() -> ArimaForecaster:
+        # Importación diferida para no crear un ciclo registry -> arima -> registry.
+        from orinoco_forecast.models.registry import build_forecaster
+
+        engine = build_forecaster("arima")
+        if not isinstance(engine, ArimaForecaster):
+            raise RuntimeError("El registro no devolvió un ArimaForecaster.")
+        return engine
+
+    @property
+    def selected_exog_columns(self) -> dict[str, tuple[str, ...]]:
+        """Columnas exógenas elegidas por estación tras ``fit``."""
+        return self._engine.selected_exog_columns
+
+    def fit(
+        self,
+        windows: pl.DataFrame,
+        frame: pl.DataFrame,
+        *,
+        cutoff: date,
+        horizon: int = DEFAULT_HORIZON,
+    ) -> Self:
+        validate_horizon(horizon)
+        validate_windows(windows, horizon=horizon)
+        self._engine.fit(frame, cutoff=cutoff)
+        self._fitted = True
+        return self
+
+    def predict(
+        self,
+        frame: pl.DataFrame,
+        *,
+        cutoff: date,
+        horizon: int = DEFAULT_HORIZON,
+    ) -> PredictionResult:
+        validate_horizon(horizon)
+        if not self._fitted:
+            raise RuntimeError("El runner no está ajustado; llama a fit primero.")
+        predictions = self._engine.predict(horizon).with_columns(
+            pl.lit(self.name).alias("model")
+        )
+        return PredictionResult.from_frame(
+            predictions, runner=self.name, horizon=horizon
+        )

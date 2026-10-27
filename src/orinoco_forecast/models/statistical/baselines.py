@@ -16,8 +16,11 @@ import polars as pl
 from orinoco_forecast.data.loading import DataQualityWarning
 from orinoco_forecast.models.base import (
     PREDICTION_COLUMNS,
+    PredictionResult,
     forecast_index,
     prepare_history,
+    validate_horizon,
+    validate_windows,
 )
 
 
@@ -140,6 +143,99 @@ class SeasonalNaiveForecaster:
                 f"{missing.height} predicciones."
             )
         return predictions.select(PREDICTION_COLUMNS)
+
+
+class NaiveRunner:
+    """Persistencia como runner: ajusta, predice y devuelve un resultado exportable.
+
+    ``windows`` se valida porque es la entrada común del contrato, pero Naive
+    solo necesita el histórico contiguo hasta ``cutoff``.
+    """
+
+    name = "naive"
+    implemented = True
+
+    def __init__(self, engine: NaiveForecaster | None = None) -> None:
+        self._engine = engine or NaiveForecaster()
+        self._fitted = False
+
+    def fit(
+        self,
+        windows: pl.DataFrame,
+        frame: pl.DataFrame,
+        *,
+        cutoff: date,
+        horizon: int = 14,
+    ) -> Self:
+        validate_horizon(horizon)
+        validate_windows(windows, horizon=horizon)
+        self._engine.fit(frame, cutoff=cutoff)
+        self._fitted = True
+        return self
+
+    def predict(
+        self,
+        frame: pl.DataFrame,
+        *,
+        cutoff: date,
+        horizon: int = 14,
+    ) -> PredictionResult:
+        validate_horizon(horizon)
+        if not self._fitted:
+            raise RuntimeError("El runner no está ajustado; llama a fit primero.")
+        predictions = self._engine.predict(horizon).with_columns(
+            pl.lit(self.name).alias("model")
+        )
+        return PredictionResult.from_frame(
+            predictions, runner=self.name, horizon=horizon
+        )
+
+
+class SeasonalNaiveRunner:
+    """Persistencia estacional como runner sobre el histórico contiguo."""
+
+    name = "seasonal_naive"
+    implemented = True
+
+    def __init__(
+        self,
+        engine: SeasonalNaiveForecaster | None = None,
+        *,
+        seasonality: int = 365,
+    ) -> None:
+        self._engine = engine or SeasonalNaiveForecaster(seasonality=seasonality)
+        self._fitted = False
+
+    def fit(
+        self,
+        windows: pl.DataFrame,
+        frame: pl.DataFrame,
+        *,
+        cutoff: date,
+        horizon: int = 14,
+    ) -> Self:
+        validate_horizon(horizon)
+        validate_windows(windows, horizon=horizon)
+        self._engine.fit(frame, cutoff=cutoff)
+        self._fitted = True
+        return self
+
+    def predict(
+        self,
+        frame: pl.DataFrame,
+        *,
+        cutoff: date,
+        horizon: int = 14,
+    ) -> PredictionResult:
+        validate_horizon(horizon)
+        if not self._fitted:
+            raise RuntimeError("El runner no está ajustado; llama a fit primero.")
+        predictions = self._engine.predict(horizon).with_columns(
+            pl.lit(self.name).alias("model")
+        )
+        return PredictionResult.from_frame(
+            predictions, runner=self.name, horizon=horizon
+        )
 
 
 class BaselinesRunner:

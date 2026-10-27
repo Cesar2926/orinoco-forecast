@@ -59,6 +59,25 @@ def validate_horizon(horizon: int) -> int:
     return horizon
 
 
+def validate_windows(windows: pl.DataFrame, *, horizon: int) -> pl.DataFrame:
+    """Validate the supervised windows passed to ``Runner.fit``."""
+    if not isinstance(windows, pl.DataFrame):
+        raise ValueError("windows debe ser un DataFrame de Polars.")
+    if windows.is_empty():
+        raise ValueError(
+            "windows no puede estar vacío: no hay ventanas de entrenamiento."
+        )
+    required = {
+        "unique_id",
+        "origin",
+        *(f"target_{step}" for step in range(1, horizon + 1)),
+    }
+    missing = sorted(required.difference(windows.columns))
+    if missing:
+        raise ValueError(f"Faltan columnas en windows: {missing}.")
+    return windows
+
+
 def _validate_runner_name(runner: str) -> str:
     if not isinstance(runner, str) or not RUNNER_NAME_PATTERN.fullmatch(runner):
         raise ValueError(
