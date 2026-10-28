@@ -1,35 +1,44 @@
-# Modelos de ensamble de árboles (XGBoost) y red convolucional (TCN)
+# Modelos de árboles (XGBoost), red convolucional (TCN) e híbrido CNN-LSTM
 
 Este documento describe cómo se prepararon los datos, cómo se evalúan los modelos, cómo
-se construyeron y ajustaron los dos modelos de esta parte del proyecto (XGBoost, llamado
-`booster` en el registro de runners, y TCN) y qué resultados obtuvieron. Está pensado como
-insumo para el informe final. El protocolo general está en el [README](../README.md) y el
-plan de los seis modelos en [`plan_modelos.md`](plan_modelos.md). El proceso paso a paso
-(decisiones, datos y entrenamiento) está en
+se construyeron y ajustaron los tres modelos de esta parte del proyecto (XGBoost, llamado
+`booster` en el registro de runners, TCN y el híbrido CNN-LSTM, `cnn_lstm`), qué resultados
+obtuvieron y cómo se comparan con el ARIMAX de Daniel. Está pensado como insumo para el
+informe final. El protocolo general está en el [README](../README.md) y el plan de los
+modelos en [`plan_modelos.md`](plan_modelos.md). El proceso paso a paso (decisiones, datos
+y entrenamiento) está en los cuadernos de [`notebooks/`](../notebooks/README.md) y en
 [`proceso_modelos_arboles_cnn.md`](proceso_modelos_arboles_cnn.md).
 
-Los números de resultados son los 24 cortes de `scripts/run_model.py --folds` (el
-booster se verificó con esa ruta; el TCN y los experimentos de covariables salieron de un
-script auxiliar equivalente, ya retirado) y los CSV de `reports/tuning/`. Las predicciones (`data/predictions/`) no se versionan en git: se
-regeneran con los comandos de la sección 9.
+Todos los números de resultados son los 24 cortes de `scripts/run_model.py --folds` y los
+CSV de `reports/tuning/`. La única excepción es el experimento de covariables de la
+sección 8, que se hizo con un script auxiliar equivalente, ya retirado, y no se volvió a
+ejecutar. Las predicciones (`data/predictions/`) no se versionan en git: se regeneran con
+los comandos de la sección 10. **El hardware de cada cifra importa**: el booster y el
+ARIMAX corrieron en CPU, el TCN en una GPU de Colab y el CNN-LSTM en ambos (sección 8,
+"Hardware y reproducibilidad").
 
 ---
 
 ## 1. Resumen
 
-Se implementaron dos modelos para pronosticar a 14 días el nivel diario del Orinoco en
+Se implementaron tres modelos para pronosticar a 14 días el nivel diario del Orinoco en
 Ciudad Bolívar y Palúa: un ensamble de árboles con *gradient boosting* (XGBoost, vía
-`mlforecast`) y una red convolucional temporal (TCN, vía `neuralforecast`). Los dos se
-ejecutan con los runners de la arquitectura común (`fit`/`predict` en un corte) y se
-validan con 24 cortes cronológicos (2021-01-26 a 2022-12-17), sin tocar el test final
-(desde 2023-01-01).
+`mlforecast`), una red convolucional temporal (TCN, vía `neuralforecast`) y un híbrido
+CNN-LSTM en PyTorch propio (neuralforecast no trae uno). Los tres se ejecutan con los
+runners de la arquitectura común (`fit`/`predict` en un corte) y se validan con 24 cortes
+cronológicos (2021-01-26 a 2022-12-17), sin tocar el test final (desde 2023-01-01). Se
+comparan además con el ARIMAX de Daniel, medido en los mismos cortes.
 
-Con datos 2009–2024, los dos superan a la persistencia (Naive) en las dos estaciones y en
-todos los horizontes medidos (`rel_mae < 1`). El XGBoost tiene el menor MAE medio entre
-estaciones (0,309 m frente a 0,339 m de la TCN). A 14 días la TCN y el XGBoost están
-cerca; el punto débil de los dos es el día 7 en Palúa (`rel_mae` 0,83 y 0,93). La lluvia y
-el ONI perjudican a la TCN y no cambian al XGBoost; por eso la TCN usa solo niveles de río
-(`drop_covariates: [rain_, oni]`).
+Con datos 2009–2024, los cuatro modelos superan a la persistencia (Naive) en las dos
+estaciones y en todos los horizontes medidos (`rel_mae < 1`). Por el MAE medio entre
+estaciones (días 1 a 14) el orden es XGBoost (0,309 m), TCN (0,317 m),
+CNN-LSTM (0,350 m en GPU) y ARIMAX (0,351 m). El TCN **empata con el XGBoost en
+Palúa** (0,342 frente a 0,341) y queda algo por detrás en Ciudad Bolívar (0,292 frente a
+0,278): la ventaja del XGBoost no es concluyente frente a la variación entre semillas. El
+CNN-LSTM **no mejora al TCN** y cuesta mucho más cómputo; sin ajuste alguno, el ARIMAX lo
+iguala en promedio con unos 10 minutos. El punto débil de todos es el día 7 en Palúa. La
+lluvia y el ONI perjudican a las redes y no cambian al XGBoost; por eso el TCN y el
+CNN-LSTM usan solo niveles de río (`drop_covariates: [rain_, oni]`).
 
 ---
 
@@ -41,6 +50,7 @@ el ONI perjudican a la TCN y no cambian al XGBoost; por eso la TCN usa solo nive
 | Ejecución | Scripts propios con `--stage A/B` y `cross_validation` de Nixtla | Runners de Daniel (`scripts/run_model.py`, `fit`/`predict` en un corte) |
 | Validación | Un ajuste único (`refit: false`) y 24 ventanas evaluadas | 24 cortes con reajuste en cada uno (`scripts/run_model.py --folds`) |
 | Horizontes | Promedio de 14 días | Se reportan además los días 7 y 14 |
+| Modelos | XGBoost y TCN | Además el híbrido CNN-LSTM (sección 6 bis) y la comparación con el ARIMAX de Daniel en los mismos 24 cortes |
 | Etapas A y B | Dos conjuntos de variables (río / río + lluvia + ONI) | Reemplazadas por `drop_covariates` en cada YAML |
 | Ciudad Bolívar | No era covariable | `ciudad_bolivar_lag_1` y `d_ciudad_bolivar_lag_1` están entre las columnas de rezagos del parquet |
 | Hiperparámetros | Ajustados con datos 1974+ | Reajustados con datos 2009–2024 (sección 7) |
@@ -285,6 +295,57 @@ alterar los valores posteriores al corte deja los pronósticos idénticos.
 
 ---
 
+## 6 bis. Modelo 3: híbrido CNN-LSTM
+
+### Qué es
+
+Un híbrido pone una **parte convolucional** delante de una **parte recurrente**. Las
+convoluciones causales (sección 6) extraen características locales de la ventana de
+entrada; una **LSTM** (*Long Short-Term Memory*) lee esas características día a día, en
+orden, y mantiene un estado interno que decide qué recordar y qué olvidar; una capa lineal
+convierte el último estado en el pronóstico de los 14 días. La idea es que la LSTM
+aporte memoria de largo plazo que el campo receptivo fijo del TCN no tiene.
+
+Se eligió **CNN-LSTM** y no ConvLSTM: ConvLSTM (Shi et al., 2015) reemplaza las
+multiplicaciones de las puertas de la LSTM por convoluciones sobre una cuadrícula espacial,
+y aquí no hay cuadrícula, solo cuatro estaciones a lo largo de un río.
+`neuralforecast` 3.3.0 tiene `TCN` y `LSTM` por separado pero ningún híbrido, así que el
+módulo es PyTorch propio dentro del mismo contrato de runner. Código en
+[`models/neural/cnn_lstm.py`](../src/orinoco_forecast/models/neural/cnn_lstm.py)
+(`CnnLstm`, `CnnLstmRunner`) y configuración en
+[`configs/models/cnn_lstm.yaml`](../configs/models/cnn_lstm.yaml).
+
+### Configuración final
+
+| Parámetro | Valor | Comentario |
+|---|---|---|
+| `target_transform` | `difference` | Igual que el TCN: predice el cambio diario y reconstruye el nivel desde el del corte. |
+| `input_size` | 112 | Buscado entre 28, 56 y 112. |
+| `conv_layers`, `conv_channels`, `kernel_size` | 1, 32, 3 | Bloques `Conv1d` + ReLU con relleno solo a la izquierda (causales). |
+| `lstm_hidden_size`, `lstm_layers` | 32, 2 | Buscado entre 32, 64 y 128 unidades y 1 o 2 capas. |
+| `dropout` | 0,0378 | Antes de la cabeza lineal y entre capas LSTM. |
+| `learning_rate` | 0,000439 | Buscado en escala logarítmica. |
+| `batch_size`, `max_epochs` | 256, 30 | Parada temprana con paciencia 5 épocas sobre los últimos 365 días de cada corte. |
+| Pérdida y escalado | L1; mediana e IQR de cada ventana | El escalado usa solo la parte de entrada de la ventana, nunca datos posteriores. |
+| `drop_covariates` | `[rain_, oni]` | Solo niveles de río, como el TCN. |
+| Semillas | 1, 2, 3 | Se reporta la media y la desviación entre semillas. |
+
+Los lotes de ventanas de entrenamiento se barajan con un generador con semilla (como hace
+neuralforecast con el TCN); la partición entre entrenamiento y validación sigue siendo
+cronológica y ninguna ventana mira más allá del corte.
+
+### Qué se verificó
+
+Hay pruebas (`tests/test_runner_cnn_lstm.py`) de que alterar los valores posteriores al
+corte no cambia el pronóstico, de que la parte convolucional es causal, de que predecir
+"cero cambio" reproduce la persistencia y de que el runner respeta `drop_covariates`.
+Gentle AI revisó el código sin hallazgos bloqueantes; quedaron avisos no bloqueantes
+(caminos de error sin prueba, un `except ValueError` demasiado amplio en el script de
+Optuna y una división por cero posible en el cálculo de `rel_mae` de las ventanas de
+ajuste si Naive fuera exacto en una ventana).
+
+---
+
 ## 7. Ajuste de hiperparámetros
 
 ### Método
@@ -299,6 +360,9 @@ eficiente que una búsqueda aleatoria cuando el presupuesto es pequeño.
 - **Objetivo:** `rel_mae` medio entre las dos estaciones.
 - **TCN:** una semilla por prueba para acotar el costo. Las configuraciones cuyo campo
   receptivo supera `input_size` se descartan sin entrenar (7 pruebas podadas).
+- **CNN-LSTM:** mismo protocolo, con las 3 semillas por prueba y un ajuste único en el
+  primer corte (2020-05-04) que se evalúa en los 12 cortes. Es el modelo que más cuesta: las
+  pruebas duraron de 0,5 a unos 20 minutos en CPU.
 - **Ventanas de ajuste:** 12 ventanas anteriores a la validación (cortes del 2020-05-04 al
   2021-01-12, cada 23 días, objetivos hasta 2021-01-26). Los hiperparámetros no se eligen
   con los 24 cortes de validación: eso dejaría de hacerlos una medición independiente.
@@ -321,55 +385,130 @@ siendo válidos, pero la medición no es idéntica.
 |---|---|---|---|
 | XGBoost | 20 completas (más 1 prueba que quedó abierta en el CSV) | 0,4902 (prueba 14: Ciudad Bolívar 0,437, Palúa 0,543) | 0,4908 (prueba 18), 0,4938 (prueba 11); peor 0,6349 |
 | TCN | 20 completas + 7 podadas | 0,6058 (prueba 25: Ciudad Bolívar 0,669, Palúa 0,542) | 0,7230 (prueba 18) |
+| CNN-LSTM | 20 completas | 0,7000 (prueba 13: Ciudad Bolívar 0,497, Palúa 0,903) | 0,7110 (prueba 6) |
 
 La mejor prueba del TCN se separa mucho del resto de las completas (0,606 frente a 0,723).
 El CSV de XGBoost tiene 21 filas porque el estudio terminó con una prueba en estado
 `RUNNING`; no tiene valor y no cuenta entre las 20 completas.
 
+El estudio del CNN-LSTM también tiene una prueba abierta (la 17, `RUNNING` en el estudio y en
+`reports/tuning/cnn_lstm_trials.csv`, que por eso tiene 21 filas): una LSTM de 128 unidades
+con 2 capas y ventana de 112 días llevaba más de 30 minutos en CPU y se detuvo. **Recorte
+declarado:** desde entonces esa combinación (128 unidades y 2 capas) se descarta en el
+script de búsqueda para cualquier tamaño de ventana, no solo para 112 (una revisión lo
+señaló); las pruebas 1, 2 y 19 con 128 unidades y una capa sí corrieron y cuentan. El CNN-LSTM
+no explora, por tanto, la combinación más grande. El ajuste de Optuna del CNN-LSTM está en
+`scripts/tune_cnn_lstm.py`.
+
 ---
 
 ## 8. Resultados
 
-Promedios sobre los 24 cortes de validación (2021-01-26 a 2022-12-17). MAE en metros.
-TCN: media entre 3 semillas (± desviación entre semillas). Booster: sin desviación porque es
-una sola corrida con `random_state: 42`. Fuente: `run_model.py --folds` para el booster (reproduce estos
-números exactamente) y un script auxiliar equivalente, ya retirado, para el TCN (no se
-volvió a ejecutar con `--folds`), con los hiperparámetros de la sección 7.
+Promedios sobre los 24 cortes de validación (2021-01-26 a 2022-12-17), todos medidos con
+`run_model.py <modelo> --against naive --folds`. MAE en metros. TCN y CNN-LSTM: media entre
+3 semillas (± desviación entre semillas). XGBoost: sin desviación porque es una sola
+corrida con `random_state: 42`. ARIMAX: una sola corrida, sin desviación. Hardware: XGBoost
+y ARIMAX en CPU, TCN y CNN-LSTM en una GPU de Colab (ver "Hardware y reproducibilidad").
 
 ### Resultados por estación y horizonte
 
-| Estación | Horizonte | Naive | XGBoost (MAE / `rel_mae`) | TCN (MAE / `rel_mae`) |
-|---|---|---|---|---|
-| Ciudad Bolívar | día 7 | 0,526 | 0,279 / 0,53 | 0,279 ± 0,034 / 0,53 ± 0,065 |
-| Ciudad Bolívar | día 14 | 1,064 | 0,444 / 0,42 | 0,511 ± 0,058 / 0,48 ± 0,055 |
-| Ciudad Bolívar | días 1 a 14 | 0,570 | 0,278 / 0,49 | 0,294 ± 0,037 / 0,52 ± 0,064 |
-| Palúa | día 7 | 0,435 | 0,360 / 0,83 | 0,403 ± 0,028 / 0,93 ± 0,064 |
-| Palúa | día 14 | 0,891 | 0,548 / 0,62 | 0,631 ± 0,024 / 0,71 ± 0,027 |
-| Palúa | días 1 a 14 | 0,488 | 0,341 / 0,70 | 0,383 ± 0,018 / 0,78 ± 0,037 |
+| Estación | Horizonte | Naive | XGBoost (MAE / `rel_mae`) | TCN, GPU (MAE ± desv. / `rel_mae`) | CNN-LSTM, GPU (MAE ± desv. / `rel_mae`) | ARIMAX (MAE / `rel_mae`) |
+|---|---|---|---|---|---|---|
+| Ciudad Bolívar | día 7 | 0,526 | 0,279 / 0,53 | 0,274 ± 0,008 / 0,52 | 0,307 ± 0,016 / 0,58 | 0,284 / 0,54 |
+| Ciudad Bolívar | día 14 | 1,064 | 0,444 / 0,42 | 0,502 ± 0,046 / 0,47 | 0,620 ± 0,007 / 0,58 | 0,576 / 0,54 |
+| Ciudad Bolívar | días 1 a 14 | 0,570 | 0,278 / 0,49 | 0,292 ± 0,013 / 0,51 | 0,337 ± 0,009 / 0,59 | 0,315 / 0,55 |
+| Palúa | día 7 | 0,435 | 0,360 / 0,83 | 0,360 ± 0,018 / 0,83 | 0,378 ± 0,021 / 0,87 | 0,377 / 0,87 |
+| Palúa | día 14 | 0,891 | 0,548 / 0,62 | 0,560 ± 0,015 / 0,63 | 0,613 ± 0,038 / 0,69 | 0,662 / 0,74 |
+| Palúa | días 1 a 14 | 0,488 | 0,341 / 0,70 | 0,342 ± 0,013 / 0,70 | 0,364 ± 0,023 / 0,75 | 0,387 / 0,79 |
+
+Medias de las dos estaciones en los días 1 a 14: XGBoost 0,309 m, TCN (GPU)
+0,317 m, CNN-LSTM 0,350 m en GPU y 0,346 m en CPU, ARIMAX 0,351 m, Naive
+0,529 m.
 
 ### Qué modelo cumple el requisito
 
-Los dos cumplen `rel_mae < 1` en cada estación y horizonte, incluidos los días 7 y 14. Por
-la métrica principal (MAE medio entre estaciones en los días 1 a 14):
+Los cuatro cumplen `rel_mae < 1` en cada estación y horizonte, incluidos los días 7 y 14
+(el valor más alto es 0,87, en Palúa a 7 días, para el CNN-LSTM y el ARIMAX). Por la
+métrica principal (MAE medio entre estaciones en los días 1 a 14), el orden es:
 
-| XGBoost | TCN (media de semillas) |
-|---|---|
-| 0,309 m | 0,339 m |
+| XGBoost | TCN (GPU, media de semillas) | CNN-LSTM (GPU) | ARIMAX |
+|---|---|---|---|
+| 0,309 m | 0,317 m | 0,350 m | 0,351 m |
 
-XGBoost queda primero por la métrica principal. En Ciudad Bolívar la diferencia a 7 días
-(0,279 frente a 0,279) es nula y en los días 1 a 14 (0,278 frente a 0,294) es menor que la
-desviación entre semillas de la TCN (0,037), así que ahí no es concluyente; en Palúa
-(0,341 frente a 0,383) es mayor que esa desviación (0,018). **El punto débil es el día 7
-en Palúa**: `rel_mae` de 0,83 (XGBoost) y 0,93 (TCN), es decir, solo una ganancia pequeña
-sobre la persistencia. La elección final corresponde al equipo, comparando con los otros
-modelos.
+- **XGBoost queda primero, pero por muy poco.** En Ciudad Bolívar le gana al TCN (0,278
+  frente a 0,292) y en Palúa empatan (0,341 frente a 0,342). La diferencia media (0,008 m) es
+  menor que la desviación entre semillas del TCN, que va de 0,009 a 0,047 según la celda,
+  así que no hay evidencia de que el XGBoost sea mejor que el TCN.
+- **El CNN-LSTM no mejora al TCN.** Es peor en Ciudad Bolívar (0,337 frente a 0,292) y algo
+  peor en Palúa (0,364 frente a 0,342) en los días 1 a 14, y a 14 días el TCN gana en las
+  dos estaciones. Cuesta más de 2 horas para los 24 cortes en CPU. La memoria recurrente no
+  compensa en este problema.
+- **El ARIMAX, sin ajustar, iguala en promedio al CNN-LSTM** (0,351 m frente a
+  0,350 m): gana en Ciudad Bolívar (0,315 frente a 0,337) y pierde en Palúa (0,387 frente a
+  0,364). Los 24 cortes duraron 583 s (unos 10 minutos) con la CPU compartida, contra más de
+  2 horas del CNN-LSTM en CPU. Su configuración es un ARIMA(2,1,2) fijo, sin búsqueda de
+  hiperparámetros como la de los otros modelos.
+- **El punto débil es el día 7 en Palúa:** `rel_mae` de 0,83 (XGBoost y TCN) y 0,87
+  (CNN-LSTM y ARIMAX), es decir, una ganancia pequeña sobre la persistencia. La elección
+  final corresponde al equipo.
 
-**Significancia estadística (test de signos de `--folds`, MAE del booster contra Naive).**
-En Ciudad Bolívar la ventaja es clara: `sign_test_p` 0,0015 en los pasos 1 a 14, 0,0066 el
-día 7 y 0,00004 el día 14. En Palúa el día 14 también (p = 0,0066), pero el **día 7 no
-muestra evidencia de que el booster gane a Naive** (p = 0,84; gana en 54 % de los cortes) y
-en los pasos 1 a 14 queda en el límite (p = 0,064, gana en 71 %). Que el `rel_mae` medio
-sea menor que 1 no basta para afirmar una ventaja sistemática en Palúa a 7 días.
+**Significancia estadística (test de signos de `--folds`, MAE contra Naive).** En Ciudad
+Bolívar a 7 y 14 días la ventaja es clara para los cuatro modelos (`sign_test_p` ≤ 0,023 en
+todas las semillas; en el XGBoost 0,0066 a 7 días y 0,00004 a 14 días, y 0,0015 en los pasos
+1 a 14). En Palúa el día 14 hay evidencia para el XGBoost (p = 0,0066) y solo en parte para el
+resto (p entre 0,007 y 0,54 según el modelo y la semilla). **Palúa a 7 días:** el XGBoost no
+muestra evidencia de que gane a Naive (p = 0,84; gana en 54 % de los cortes), tampoco el TCN
+(p = 0,54 a 1,00 según la semilla) ni el CNN-LSTM (p = 0,31 a 0,84). El ARIMAX da p = 0,023 y
+gana en 75 % de los cortes (18 de 24), pero cuando pierde lo hace por mucho: su mejora
+media por corte es de -61 %, aunque su MAE medio (0,377) sí es menor que el de Naive
+(0,435). En los pasos 1 a 14 de Palúa el XGBoost y el ARIMAX quedan en el límite (p = 0,064).
+Que el `rel_mae` medio sea menor que 1 no basta para afirmar una ventaja sistemática en
+Palúa a 7 días.
+
+### Hardware y reproducibilidad
+
+| Modelo | Hardware de las cifras de arriba | Duración de los 24 cortes |
+|---|---|---|
+| XGBoost | CPU (local) | no medida; del orden de minutos |
+| ARIMAX | CPU (local) | 583 s, con la CPU compartida con otra corrida |
+| TCN | GPU de Colab (T4) | no medida |
+| CNN-LSTM | GPU de Colab (T4); también se midió en CPU (local) | CPU: de 2 h 16 min a 2 h 28 min; GPU: no medida |
+
+**CNN-LSTM, CPU contra GPU.** Es el único modelo medido en los dos. Mismo código, datos y
+comando. Criterio fijado antes de ver el resultado: por estación y horizonte, la
+diferencia del MAE medio debe ser menor que la mayor desviación entre semillas de las dos
+corridas, y el test de signos debe llegar a la misma conclusión al nivel 0,05.
+
+| Estación | Horizonte | MAE CPU | MAE GPU | Diferencia | Tolerancia (mayor desv. entre semillas) |
+|---|---|---|---|---|---|
+| Ciudad Bolívar | día 7 | 0,298 | 0,307 | 0,009 | 0,041 |
+| Ciudad Bolívar | día 14 | 0,613 | 0,620 | 0,007 | 0,056 |
+| Ciudad Bolívar | días 1 a 14 | 0,331 | 0,337 | 0,006 | 0,035 |
+| Palúa | día 7 | 0,372 | 0,378 | 0,006 | 0,021 |
+| Palúa | día 14 | 0,613 | 0,613 | 0,000 | 0,038 |
+| Palúa | días 1 a 14 | 0,362 | 0,364 | 0,003 | 0,023 |
+
+Las diferencias se calculan con los valores sin redondear, por eso la de Palúa (días 1 a 14) figura como 0,003 aunque los dos MAE redondeados (0,362 y 0,364) difieran en 0,002.
+
+Las diferencias de MAE son de 0,000 a 0,009, todas menores que la variación entre semillas.
+Las conclusiones del test de signos coinciden en 5 de las 6 celdas. **El criterio estricto
+no se cumple en una celda, Palúa a 14 días:** la mediana de `p` entre semillas cae en lados
+distintos de 0,05 (0,064 en CPU y 0,023 en GPU) aunque el MAE es idéntico (0,613); equivale
+a un corte más o menos entre 24. El error es prácticamente igual, pero lo declaramos así.
+
+Otras notas de reproducibilidad:
+
+- **La GPU no es determinista.** neuralforecast usa `nanmedian` en CUDA, que no tiene versión
+  determinista (aviso `median CUDA with indices output does not have a deterministic
+  implementation` en el registro de Colab). Dos corridas en GPU no darían números idénticos.
+- **Pregunta abierta, sin resolver.** El TCN no se volvió a ejecutar en CPU con `--folds`. Su
+  medición anterior en CPU (hecha con el script auxiliar ya retirado) dio 0,294 en Ciudad
+  Bolívar, casi igual que ahora (0,292), pero 0,383 en Palúa frente a 0,342 en GPU. Esa diferencia
+  es mayor que la variación entre semillas (0,013) y no sabemos si viene del hardware o del
+  script.
+- **Qué se declara en el informe:** XGBoost y ARIMAX en CPU, TCN en GPU y CNN-LSTM en ambos.
+  Las cifras del TCN en CPU y en GPU no son intercambiables hasta resolver la pregunta
+  anterior.
 
 ### Qué aportan la lluvia y el ONI
 
@@ -416,9 +555,15 @@ protocolo (cortes, datos limpios, horizonte, métricas) es el mismo para todos.
   filtra la predicción a las dos objetivo; la TCN y el XGBoost aprenden también de
   Ayacucho y Caicara. No se probó qué pasa si se entrenan solo con las dos objetivo.
 - **Reajuste en cada corte.** `--folds` reentrena en cada corte, distinto del
-  protocolo anterior (un ajuste único) con el que Optuna eligió los hiperparámetros. El TCN
-  con 24 cortes y 3 semillas tarda del orden de una hora en CPU (estimado; no se midió con
-  cronómetro).
+  protocolo anterior (un ajuste único) con el que Optuna eligió los hiperparámetros. El
+  CNN-LSTM con 24 cortes y 3 semillas tardó entre 2 h 16 min y 2 h 28 min en CPU; el TCN y el
+  XGBoost no se cronometraron.
+- **Hardware mezclado.** XGBoost y ARIMAX corrieron en CPU, TCN en GPU y CNN-LSTM en ambos.
+  El CNN-LSTM cumple el criterio CPU contra GPU en 5 de 6 celdas; la diferencia del TCN en
+  Palúa entre su medición antigua en CPU y la de GPU queda sin resolver (sección 8).
+- **El CNN-LSTM no explora su combinación más grande.** La combinación LSTM de 128 unidades
+  con 2 capas se descartó en el ajuste por tiempo de cómputo, para cualquier ventana
+  (sección 7). Es un ajuste de una sola serie de semillas y 12 ventanas.
 - **Ventanas de ajuste sin la temporada seca completa.** Las 12 ventanas van de mayo de
   2020 a enero de 2021; el hueco imputado de 2020 impide cortes en febrero–abril.
 - **Una prueba abierta en el estudio de XGBoost.** Ver sección 7; no afecta las 20 completas.
@@ -446,23 +591,29 @@ uv run python scripts/run_model.py booster --write-dataset
 # Un corte (último de validación) contra Naive
 uv run python scripts/run_model.py booster --against naive
 uv run python scripts/run_model.py tcn --against naive
+uv run python scripts/run_model.py cnn_lstm --against naive
 
 # Validación de 24 cortes (n_windows y step_size en configs/backtest.yaml);
 # salidas en data/predictions/<modelo>/backtest/naive/
 uv run python scripts/run_model.py booster --against naive --folds
 uv run python scripts/run_model.py tcn --against naive --folds
+uv run python scripts/run_model.py cnn_lstm --against naive --folds
+uv run python scripts/run_model.py arimax --against naive --folds
+# Las redes tardan más de 2 horas en CPU: notebooks/colab_folds.ipynb las corre en una
+# GPU de Colab (cambia MODEL en la primera celda y BRANCH a main).
 
 # Las columnas que ve cada modelo se declaran en su YAML (drop_covariates).
-# El experimento de covariables se hizo con un script auxiliar equivalente, ya retirado, que aplicaba la misma lógica que `drop_covariates`.
+# El experimento de covariables del TCN (6 y 24 cortes) se hizo con un script auxiliar equivalente, ya retirado, que aplicaba la misma lógica que `drop_covariates`.
 
 # Tablero (lee data/predictions/<runner>/*.parquet generados por run_model.py)
 uv run streamlit run app/dashboard.py
 ```
 
 El ajuste de hiperparámetros con Optuna (`scripts/tune_model.py`) ya no está en `main`;
-se recupera del commit `b87533d`. Sus resultados están en `reports/tuning/`. Tiempos medidos en CPU
-(sin GPU): XGBoost, minutos para 24 cortes; TCN con 3 semillas, del orden de una hora para 24
-cortes (estimado).
+se recupera del commit `b87533d`. Sus resultados están en `reports/tuning/`. El CNN-LSTM tiene
+su propio script de búsqueda, `scripts/tune_cnn_lstm.py`, versionado en `main`. Tiempos de los
+24 cortes: ARIMAX 583 s (CPU compartida), CNN-LSTM de 2 h 16 min a 2 h 28 min en CPU; XGBoost
+y TCN no se cronometraron.
 
 ---
 

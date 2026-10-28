@@ -44,7 +44,7 @@ cutoff (same difference target and reconstruction as the TCN). Inputs: station l
 
 - [x] T1 Module + runner + config + registry + tests (RED first). Delegated fork (route: delegated direct; trigger: 2+ non-trivial files). Commit: see Progress.
 - [x] T2 Optuna search (20 trials) and apply best params. Delegated fork (route: delegated direct; trigger: new script + runner fix + 1 h 47 min of trials). Commits: see Progress.
-- [ ] T3 Validation with `--folds` vs naive, booster and TCN; docs section.
+- [x] T3 Validation with `--folds` vs naive, booster, TCN and ARIMAX; docs and notebooks updated. Commits: see Progress.
 
 ## Delivery strategy
 
@@ -75,7 +75,20 @@ single-pr on `feat/cnn-lstm` (from main ff458d1), separate commits per task.
 - T2 trim (declared): trial #17 (LSTM 128 x 2 layers, window 112) ran over 30 min on CPU and was killed (stays RUNNING in the
   study and in the CSV, 21 rows); from then on that combination is pruned in `suggest` (tested). Trials 1, 2 and 19 used
   LSTM 128 x 1 layer (6.5 and 19 min). Tuning is a single-seed-set, 12-window estimate; the 24-fold validation is T3.
+- T3 result (24 folds, MAE of days 1-14, mean of 3 seeds): CNN-LSTM on Colab GPU CB 0.337 / Palua 0.364
+  (rel_mae 0.59 / 0.75, mean over stations 0.350); on local CPU CB 0.331 / Palua 0.362 (mean 0.346), same
+  command `run_model.py cnn_lstm --against naive --folds` (2 h 16 min to 2 h 28 min on CPU). The first local
+  attempt failed at the end on the per-seed model-name check (fixed in PR #10) and the GPU run first failed on
+  a CPU-only quantile tensor (fixed on main, commit 4539c69).
+- Comparison with the other models (same 24 folds; mean over stations of days 1-14): booster 0.309 (CPU), TCN 0.317
+  (GPU), CNN-LSTM 0.350 (GPU), ARIMAX 0.351 (CPU, 583 s). The hybrid does not improve on the TCN and costs far more
+  compute than ARIMAX; all four have rel_mae < 1 everywhere. Palua day 7 stays the weak point.
+- CPU vs GPU criterion (agreed before looking): MAE difference < largest seed std and same sign-test verdict at 0.05.
+  MAE differences 0.000-0.009 in all 6 cells (all below the seed std); verdicts agree in 5 of 6; Palua day 14 differs
+  (median p 0.064 CPU vs 0.023 GPU, identical MAE 0.613). Open question: the TCN was not rerun on CPU with `--folds`
+  (old CPU figure from the retired script: Palua 0.383 vs 0.342 on GPU).
 
 ## Next step
 
-T3 (24-fold validation with `run_model.py cnn_lstm --against naive --folds`, compare with booster and TCN).
+Agree with the team on the final-evaluation protocol (single run on 2023-2024 with all models; select on validation and
+use the test only to report) and close the review warnings with a tests commit.

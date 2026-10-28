@@ -3,8 +3,8 @@
 | Cuaderno | Qué cuenta |
 |---|---|
 | [`01_xgboost_booster.ipynb`](01_xgboost_booster.ipynb) | Proceso del XGBoost (`booster`): datos, partición, diseño, Optuna, validación de 24 cortes y limitaciones |
-| [`02_tcn.ipynb`](02_tcn.ipynb) | Proceso de la red convolucional TCN, con el experimento de covariables |
-| [`03_cnn_lstm.ipynb`](03_cnn_lstm.ipynb) | Proceso del híbrido CNN-LSTM y su comparación con los otros dos. **La validación de 24 cortes está pendiente** |
+| [`02_tcn.ipynb`](02_tcn.ipynb) | Proceso de la red convolucional TCN, validación de 24 cortes (GPU) y el experimento de covariables |
+| [`03_cnn_lstm.ipynb`](03_cnn_lstm.ipynb) | Proceso del híbrido CNN-LSTM, validación de 24 cortes (CPU y GPU) y comparación con los otros modelos |
 | [`colab_folds.ipynb`](colab_folds.ipynb) | Ejecuta `run_model.py <modelo> --folds` en Google Colab con GPU |
 
 ## Cómo usarlos
