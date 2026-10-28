@@ -32,6 +32,10 @@ val_size: 365
 val_check_steps: 50
 early_stop_patience_steps: 5
 
+# Covariate columns (by name prefix) hidden from the model. Rain and ONI hurt the
+# TCN in rolling validation (rel_mae 1.12 vs 0.81 at Palua); river levels help.
+drop_covariates: [rain_, oni]
+
 # One model per seed on the same windows; columns TCN_s<seed>, reported as
 # mean +- std across seeds (predictions are not averaged).
 seeds: [1, 2, 3]

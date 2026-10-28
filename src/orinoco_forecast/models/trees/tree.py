@@ -17,7 +17,11 @@ from mlforecast.target_transforms import Differences
 from xgboost import XGBRegressor
 
 from orinoco_forecast.data.loading import load_config, repo_root
-from orinoco_forecast.features.dataset import NON_FEATURE_COLUMNS, fourier_terms
+from orinoco_forecast.features.dataset import (
+    NON_FEATURE_COLUMNS,
+    drop_covariates,
+    fourier_terms,
+)
 from orinoco_forecast.models.base import (
     DEFAULT_HORIZON,
     PredictionResult,
@@ -131,7 +135,10 @@ class BoosterRunner:
         ``horizon`` days, so its future value at ``cutoff + h`` comes from an
         observation at or before ``cutoff``. Fourier terms are deterministic.
         """
-        history = frame.filter(pl.col("ds") <= cutoff)
+        history = drop_covariates(
+            frame.filter(pl.col("ds") <= cutoff),
+            self.params.get("drop_covariates", []),
+        )
         skip = {*KEYS, *NON_FEATURE_COLUMNS}
         historical = [
             column
@@ -184,7 +191,10 @@ class BoosterRunner:
     ) -> Self:
         validate_horizon(horizon)
         validate_windows(windows, horizon=horizon)
-        history = frame.filter(pl.col("ds") <= cutoff).sort("unique_id", "ds")
+        history = drop_covariates(
+            frame.filter(pl.col("ds") <= cutoff).sort("unique_id", "ds"),
+            self.params.get("drop_covariates", []),
+        )
         if history.is_empty():
             raise ValueError(f"No hay observaciones hasta el corte {cutoff}.")
         data = self._prepare(history, {"horizon": horizon})

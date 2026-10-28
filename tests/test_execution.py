@@ -155,3 +155,25 @@ def test_clean_history_drops_rows_with_unavailable_lags() -> None:
         }
     )
     assert clean_history(frame)["ds"].min() == days[2]
+
+
+def test_drop_covariates_removes_prefixed_columns_and_keeps_keys() -> None:
+    from orinoco_forecast.features.dataset import drop_covariates
+
+    frame = pl.DataFrame(
+        {
+            "unique_id": ["a"],
+            "ds": [1],
+            "y": [1.0],
+            "rain_x": [1.0],
+            "oni": [0.1],
+            "lag": [2.0],
+        }
+    )
+    assert drop_covariates(frame, ["rain_", "oni"]).columns == [
+        "unique_id",
+        "ds",
+        "y",
+        "lag",
+    ]
+    assert drop_covariates(frame, []).columns == frame.columns

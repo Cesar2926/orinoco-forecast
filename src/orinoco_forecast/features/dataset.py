@@ -105,6 +105,22 @@ def clean_history(frame: pl.DataFrame) -> pl.DataFrame:
     return cleaned.drop("quality").drop_nulls()
 
 
+def drop_covariates(frame: pl.DataFrame, prefixes: Iterable[str]) -> pl.DataFrame:
+    """Drop covariate columns whose name starts with any of ``prefixes``.
+
+    Keys (``unique_id, ds, y``) are never dropped. Used by the runners so each
+    model's config (``drop_covariates``) chooses its inputs the same way.
+    """
+    prefixes = tuple(prefixes)
+    if not prefixes:
+        return frame
+    return frame.select(
+        c
+        for c in frame.columns
+        if c in {"unique_id", "ds", "y"} or not c.startswith(prefixes)
+    )
+
+
 def fourier_terms(ds: pl.Series, period: float = 365.25, k: int = 3) -> pl.DataFrame:
     """Términos ``sin_j, cos_j = sin/cos(2·π·j·t / period)``, ``j = 1..k``.
 

@@ -18,6 +18,9 @@ target_differences: [1]
 # every value used at a forecast date is already observed at the cutoff.
 covariate_lags: [14, 28, 56, 90] # ajustado con Optuna: 20 pruebas, ventanas de ajuste 2020, datos 2009-2024, objetivo rel_mae medio
 
+# Covariate columns (by name prefix) hidden from the model; same option as the TCN.
+drop_covariates: []
+
 xgb_params:
   # Search space and trials: evaluation/tuning.py, reports/tuning/xgboost_trials.csv.
   n_estimators: 300 # ajustado con Optuna: 20 pruebas, ventanas de ajuste 2020, datos 2009-2024, objetivo rel_mae medio
