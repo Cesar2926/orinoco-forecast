@@ -6,6 +6,7 @@ from pathlib import Path
 
 import optuna
 import polars as pl
+import pytest
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "tune_cnn_lstm.py"
 spec = importlib.util.spec_from_file_location("tune_cnn_lstm", SCRIPT)
@@ -37,7 +38,11 @@ def test_search_space_stays_inside_the_declared_bounds() -> None:
     study = optuna.create_study(sampler=optuna.samplers.RandomSampler(seed=0))
     for _ in range(25):
         trial = study.ask()
-        params = tune.suggest(trial, BASE)
+        try:
+            params = tune.suggest(trial, BASE)
+        except optuna.TrialPruned:
+            study.tell(trial, state=optuna.trial.TrialState.PRUNED)
+            continue
         assert params["input_size"] in (28, 56, 112)
         assert params["conv_channels"] in (16, 32, 64)
         assert params["kernel_size"] in (2, 3, 5)
@@ -106,3 +111,20 @@ def test_evaluate_returns_rel_mae_per_station_on_synthetic_data() -> None:
     value, per_station, mae = tune.evaluate(params, _frame(), cutoffs, horizon=3)
     assert value > 0 and mae > 0
     assert set(per_station) == {"ciudad_bolivar", "palua"}
+
+
+def test_heaviest_lstm_combination_is_pruned() -> None:
+    fixed = {
+        "input_size": 112,
+        "conv_channels": 16,
+        "kernel_size": 3,
+        "conv_layers": 1,
+        "lstm_hidden_size": 128,
+        "lstm_layers": 2,
+        "dropout": 0.1,
+        "learning_rate": 0.0004,
+        "batch_size": 256,
+    }
+    with pytest.raises(optuna.TrialPruned):
+        tune.suggest(optuna.trial.FixedTrial(fixed), BASE)
+    tune.suggest(optuna.trial.FixedTrial({**fixed, "lstm_layers": 1}), BASE)

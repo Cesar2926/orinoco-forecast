@@ -7,26 +7,25 @@
 # cutoff (persistence = zero prediction), like the TCN; "level" models y directly.
 target_transform: difference
 
-# Days of history per window. Not tuned yet: 56 keeps CPU training affordable
-# (the TCN's best window was 112; Optuna can search 28/56/112).
-input_size: 56
+# Days of history per window (Optuna searched 28/56/112; 112 won, like the TCN).
+input_size: 112 # ajustado con Optuna: 20 pruebas, ventanas de ajuste 2020, datos 2009-2024, objetivo rel_mae medio
 
 # Convolutional front end. Each block is Conv1d + ReLU with left padding, so an
 # output never sees later days.
 conv_channels: 32
 kernel_size: 3
-conv_layers: 2
+conv_layers: 1 # ajustado con Optuna: 20 pruebas, ventanas de ajuste 2020, datos 2009-2024, objetivo rel_mae medio
 
 # Recurrent part: the last hidden state feeds the linear head.
-lstm_hidden_size: 64
-lstm_layers: 1
+lstm_hidden_size: 32 # ajustado con Optuna: 20 pruebas, ventanas de ajuste 2020, datos 2009-2024, objetivo rel_mae medio
+lstm_layers: 2 # ajustado con Optuna: 20 pruebas, ventanas de ajuste 2020, datos 2009-2024, objetivo rel_mae medio
 # Dropout before the linear head and between stacked LSTM layers (0 = off).
-dropout: 0.0
+dropout: 0.0378 # ajustado con Optuna: 20 pruebas, ventanas de ajuste 2020, datos 2009-2024, objetivo rel_mae medio
 
 # Optimisation: L1 loss on window-scaled targets (matches the MAE criterion).
 # Each window is scaled with the median/IQR of its own input part, never with
 # later data. Training windows are shuffled with a seeded generator.
-learning_rate: 0.002
+learning_rate: 0.000439 # ajustado con Optuna: 20 pruebas, ventanas de ajuste 2020, datos 2009-2024, objetivo rel_mae medio
 batch_size: 256
 max_epochs: 30
 

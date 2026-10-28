@@ -43,7 +43,7 @@ cutoff (same difference target and reconstruction as the TCN). Inputs: station l
 ## Tasks
 
 - [x] T1 Module + runner + config + registry + tests (RED first). Delegated fork (route: delegated direct; trigger: 2+ non-trivial files). Commit: see Progress.
-- [ ] T2 Optuna search (20 trials) and apply best params.
+- [x] T2 Optuna search (20 trials) and apply best params. Delegated fork (route: delegated direct; trigger: new script + runner fix + 1 h 47 min of trials). Commits: see Progress.
 - [ ] T3 Validation with `--folds` vs naive, booster and TCN; docs section.
 
 ## Delivery strategy
@@ -64,6 +64,18 @@ single-pr on `feat/cnn-lstm` (from main ff458d1), separate commits per task.
   CPU incl. dataset write; MAE all steps CB 0.68-1.00, Palua 0.66-0.90 (booster same cutoff: 0.83 / 1.09).
   One cutoff only; a 24-fold run would take about 40 min.
 
+- T2 RED: `tests/test_tune_cnn_lstm.py` -> FileNotFoundError (script absent); dropout test -> TypeError. GREEN: 281 passed,
+  2 skipped; ruff check clean. Runner change: `dropout` parameter (before the head and between stacked LSTM layers).
+- T2 protocol: 12 tuning cutoffs every 23 days (2020-05-04..2021-01-12), fit once at 2020-05-04, predict all 12, 3 seeds,
+  objective = mean rel_mae over CB and Palua vs Naive (all steps); imputation guard passed (no imputed day within 14 days).
+  Study `artifacts/optuna/cnn_lstm_2009.db` (gitignored), TPE seed 42, 20 COMPLETE trials, none pruned by validity.
+- T2 result: best trial #13, rel_mae 0.700 (CB 0.497, Palua 0.903, mean MAE 0.262): input_size 112, conv_channels 32,
+  kernel 3, conv_layers 1, lstm_hidden 32, lstm_layers 2, dropout 0.0378, lr 0.000439, batch 256. Runner-up #6: 0.711.
+  Palua is the weak point (0.90 vs 0.50 in CB), as with the TCN. Trial durations 0.5-19 min; trials sum 1.79 h.
+- T2 trim (declared): trial #17 (LSTM 128 x 2 layers, window 112) ran over 30 min on CPU and was killed (stays RUNNING in the
+  study and in the CSV, 21 rows); from then on that combination is pruned in `suggest` (tested). Trials 1, 2 and 19 used
+  LSTM 128 x 1 layer (6.5 and 19 min). Tuning is a single-seed-set, 12-window estimate; the 24-fold validation is T3.
+
 ## Next step
 
-T2 (Optuna search).
+T3 (24-fold validation with `run_model.py cnn_lstm --against naive --folds`, compare with booster and TCN).

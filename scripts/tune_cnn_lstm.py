@@ -50,8 +50,12 @@ def tuning_cutoffs(first_validation_cutoff: date, horizon: int) -> list[date]:
 
 
 def suggest(trial: optuna.Trial, base: dict[str, Any]) -> dict[str, Any]:
-    """Search space; epochs and patience stay fixed (30 / 5)."""
-    return {
+    """Search space; epochs and patience stay fixed (30 / 5).
+
+    Trimmed after trial 17: a 128-unit, 2-layer LSTM on a 112-day window ran over
+    30 min on CPU (one 128-unit layer took 6.5 min), so that combination is pruned.
+    """
+    params = {
         **base,
         "input_size": trial.suggest_categorical("input_size", [28, 56, 112]),
         "conv_channels": trial.suggest_categorical("conv_channels", [16, 32, 64]),
@@ -67,6 +71,11 @@ def suggest(trial: optuna.Trial, base: dict[str, Any]) -> dict[str, Any]:
         "max_epochs": 30,
         "early_stop_patience": 5,
     }
+    if params["lstm_hidden_size"] == 128 and params["lstm_layers"] == 2:
+        raise optuna.TrialPruned(
+            "LSTM de 128 unidades y 2 capas: demasiado lento en CPU."
+        )
+    return params
 
 
 def score(
