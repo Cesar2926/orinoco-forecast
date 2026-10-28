@@ -488,6 +488,8 @@ corridas, y el test de signos debe llegar a la misma conclusión al nivel 0,05.
 | Palúa | día 14 | 0,613 | 0,613 | 0,000 | 0,038 |
 | Palúa | días 1 a 14 | 0,362 | 0,364 | 0,003 | 0,023 |
 
+Las diferencias se calculan con los valores sin redondear, por eso la de Palúa (días 1 a 14) figura como 0,003 aunque los dos MAE redondeados (0,362 y 0,364) difieran en 0,002.
+
 Las diferencias de MAE son de 0,000 a 0,009, todas menores que la variación entre semillas.
 Las conclusiones del test de signos coinciden en 5 de las 6 celdas. **El criterio estricto
 no se cumple en una celda, Palúa a 14 días:** la mediana de `p` entre semillas cae en lados
@@ -501,7 +503,7 @@ Otras notas de reproducibilidad:
   implementation` en el registro de Colab). Dos corridas en GPU no darían números idénticos.
 - **Pregunta abierta, sin resolver.** El TCN no se volvió a ejecutar en CPU con `--folds`. Su
   medición anterior en CPU (hecha con el script auxiliar ya retirado) dio 0,294 en Ciudad
-  Bolívar, igual que ahora (0,292), pero 0,383 en Palúa frente a 0,342 en GPU. Esa diferencia
+  Bolívar, casi igual que ahora (0,292), pero 0,383 en Palúa frente a 0,342 en GPU. Esa diferencia
   es mayor que la variación entre semillas (0,013) y no sabemos si viene del hardware o del
   script.
 - **Qué se declara en el informe:** XGBoost y ARIMAX en CPU, TCN en GPU y CNN-LSTM en ambos.

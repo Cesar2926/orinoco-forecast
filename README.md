@@ -334,7 +334,7 @@ booster y ARIMAX corrieron en CPU, TCN en una GPU de Colab y el CNN-LSTM en ambo
   determinista (aviso en el registro). Dos corridas en GPU no darían números idénticos.
 - **Pregunta abierta, sin resolver:** el TCN no se volvió a ejecutar en CPU con `--folds`.
   Su medición anterior en CPU (hecha con un script auxiliar ya retirado) dio 0,294 en
-  Ciudad Bolívar, igual que ahora, pero 0,383 en Palúa frente a 0,342 en GPU; esa diferencia
+  Ciudad Bolívar, casi igual que ahora (0,292), pero 0,383 en Palúa frente a 0,342 en GPU; esa diferencia
   es mayor que la variación entre semillas y no sabemos si viene del hardware o del script.
 
 ---
