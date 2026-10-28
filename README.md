@@ -68,59 +68,66 @@ Caicara y, para Palúa, Ciudad Bolívar), variables cíclicas de calendario, pre
 
 | Archivo | Contenido | Rango | Uso en el proyecto |
 |---|---|---|---|
-| `Niveles Orinoco.xlsx` | Niveles diarios de 4 estaciones: `ayacucho`, `caicara`, `ciudad_bolivar`, `palua`. | 1974-01-01 a 2025-02-24 (18 683 días) | **Fuente principal.** Es la única con las cuatro estaciones alineadas día a día. |
-| `Niveles Del Orinoco Est. Ciudad Bolivar 1930-2025.xlsx` | Histórico de Ciudad Bolívar con años en columnas y días en filas (sin 29 de febrero). | 1930 a 2025 | Extiende Ciudad Bolívar hasta 2025-12-31 y sirve para detectar valores imputados en la fuente principal. |
-| `Nivel Orinoco Formateado.csv` | La fuente principal extendida a mano hasta 2025-12-31 con lecturas del histórico. | 1974-01-01 a 2025-12-31 | La usa `scripts/build_exogenous_dataset.py` en el pipeline de ARIMA/ARIMAX; el marco de modelado de XGBoost/TCN se construye a partir de las dos fuentes xlsx. |
-| `dataset_imputado_simpleml.csv.xls` | CSV (pese a la extensión) idéntico, celda por celda, a `Niveles Orinoco.xlsx`. | 1974 a 2025 | No se usa: es un duplicado. |
+| `DATOS RIO ORINOCO.xlsx` (hoja `Entrenar`) | Niveles diarios de 4 estaciones: la primera columna es la fecha y las siguientes son `ayacucho`, `caicara`, `ciudad_bolivar`, `palua`. | 2009-01-01 a 2025-03-31 (5 934 filas; las filas desde 2025-02-25 están vacías) | **Fuente oficial.** Solo se usa **2009-01-01 a 2024-12-31**, el período válido según el profesor. La lee `TimeSeriesDataset.extract_levels` (`data/datasets.py`). |
 
-La descripción detallada de cada archivo (columnas, nulos, rarezas) está en
-[`data/raw/README.md`](data/raw/README.md). Las estaciones están ordenadas de aguas arriba
-a aguas abajo: **Ayacucho → Caicara → Ciudad Bolívar → Palúa**. Ese orden importa: una
-subida de nivel en Ayacucho llega días después a Ciudad Bolívar, por lo que los niveles
+`data/raw/` contiene además `ayacucho_raw.*`, `caicara_raw.csv`, `ciudad_bolivar_raw.csv`,
+`dataset_combinado.csv`, `dataset_hasta_2006.csv` y `dataset_imputado_simpleml.csv`; ningún
+código de `src/`, `scripts/` ni `configs/` los lee. Las estaciones están ordenadas de aguas
+arriba a aguas abajo: **Ayacucho → Caicara → Ciudad Bolívar → Palúa**. Ese orden importa:
+una subida de nivel en Ayacucho llega días después a Ciudad Bolívar, por lo que los niveles
 rezagados de las estaciones superiores son predictores naturales.
 
 ### Calidad de los datos
 
-La auditoría de las fuentes encontró lo siguiente:
+Hallazgos en el período 2009-01-01 a 2024-12-31 (5 844 días por estación):
 
 | Hallazgo | Detalle |
 |---|---|
-| Nulos en la fuente principal | Ayacucho, Caicara y Ciudad Bolívar: ninguno. Palúa: 17, casi todos el 29 de febrero de años bisiestos (1976–1996); el hueco más largo es de 3 días. |
-| Fuente principal ya procesada | `Niveles Orinoco.xlsx` es idéntico a `dataset_imputado_simpleml`. Donde el histórico de Ciudad Bolívar tiene nulos (por ejemplo en 2021), la fuente principal tiene valores con forma de interpolación. No es posible distinguir valores observados de imputados en Ayacucho, Caicara y Palúa. |
-| Conflicto entre fuentes de Ciudad Bolívar | Coinciden casi exactamente en 1984–1986 y 1998–2025. Difieren entre 5 y 12 cm en 1974–1982, y de forma importante en **1987** (mayo–diciembre, error medio de 0,83 m) y **1997** (error medio de 1,22 m, con aparente desfase de fechas). |
-| Valores repetidos sospechosos | Ciudad Bolívar repite 2,78 m durante 19 días desde 2020-03-25; Palúa repite 1,8 m durante 16 días desde 1996-04-08. Un río no se queda inmóvil tantos días: son nulos disfrazados. |
-| Hueco largo en el histórico | 161 días sin datos entre 1933-10-11 y 1934-03-20. |
+| Nulos | Ayacucho, Caicara y Ciudad Bolívar: ninguno. Palúa: 3, el 29 de febrero de 2012, 2016 y 2020 (etiqueta `missing`). |
+| Valores repetidos sospechosos | Ayacucho repite el mismo valor del 2019-03-07 al 2019-03-18 (12 días) y Ciudad Bolívar del 2020-03-24 al 2020-04-11 (19 días). Un río no se queda inmóvil tantos días: son nulos disfrazados (`suspect_flat`). |
+| Salto diario sospechoso | Palúa el 2021-10-29 marca 9,79 m entre 8,73 y 8,86 m (`suspect_jump`). Se etiqueta pero no se modifica. |
+| Origen de los datos | El Excel no documenta si ya traía imputación previa, así que no se puede distinguir un valor observado de uno imputado fuera de las reglas de abajo. |
 
-**Limitación declarada:** los datos de base ya traían una imputación de origen
-desconocido. Los resultados del proyecto deben leerse con esa salvedad.
+**Limitación declarada:** los resultados deben leerse con esa salvedad. Ya no se emite la
+etiqueta `source_conflict`: el histórico de Ciudad Bolívar 1930-2025 con el que se
+comparaba fue eliminado de `data/raw/`, así que no hay fuente de referencia.
 
 #### Tratamiento
 
-Ningún valor de `data/raw/` se modifica. Al extraer los datos a `data/interim/`, cada valor
-recibe una etiqueta en la columna `quality`:
+Ningún valor de `data/raw/` se modifica. La carga etiqueta cada valor en la columna
+`quality`:
 
 | Etiqueta | Significado |
 |---|---|
 | `observed` | Valor tal como viene de la fuente. |
 | `missing` | Sin valor. |
 | `suspect_flat` | Forma parte de una racha de 10 o más días con el mismo valor exacto. |
-| `suspect_jump` | Cambio diario anormalmente grande respecto a los días vecinos. |
-| `source_conflict` | Las dos fuentes de Ciudad Bolívar difieren de forma importante (1987, 1997). |
+| `suspect_jump` | Cambio diario mayor que 1 m respecto al día anterior. |
+| `source_conflict` | Ya no se emite (ver arriba); sigue en el esquema por compatibilidad. |
 
 Las etiquetas hacen explícita cada decisión y permiten revertirla cambiando una regla, en
-lugar de corregir los archivos a mano. Los huecos se tratan según su tipo:
+lugar de corregir los archivos a mano. `clean_series` ([`features/dataset.py`](src/orinoco_forecast/features/dataset.py))
+trata los huecos así:
 
 | Tipo de hueco | Tratamiento | Motivo |
 |---|---|---|
-| 1 a 3 días | Interpolación lineal en el tiempo | El río cambia pocos centímetros por día; el error es despreciable. |
 | Racha `suspect_flat` | Se convierte en nulo y se trata como hueco de esa longitud | Dejarla enseñaría al modelo que el río puede quedarse inmóvil. |
-| Hueco largo (meses) | No se rellena; la serie se recorta | Interpolar meses es inventar una temporada completa. |
-| Ciudad Bolívar sin estaciones vecinas (desde 2025-02-25) | No se imputan las estaciones vecinas | Ese tramo solo sirve a los modelos que usan únicamente Ciudad Bolívar. |
+| Hueco de hasta 31 días (`max_gap_days`) | Interpolación lineal en el tiempo; la fila queda con `imputed = True` | El río cambia pocos centímetros por día; el error es pequeño. |
+| Hueco más largo o en los extremos | No se rellena; avisa con `DataQualityWarning`. `build_model_frame` lanza un error con la lista de huecos; `clean_history` descarta esas filas. | Interpolar meses es inventar una temporada completa. |
+
+En 2009–2024 todos los huecos son cortos: se interpolan las dos rachas planas y los tres
+29 de febrero de Palúa (34 filas imputadas: 12 en Ayacucho, 19 en Ciudad Bolívar y 3 en
+Palúa) y no queda ningún nulo. El último día imputado es el 2020-04-11, anterior a todos los
+cortes de validación (2021-01-26 en adelante). Además, `clean_history` descarta los primeros
+60 días de 2009: las columnas de rezagos que trae el parquet (por ejemplo `oni_lag_60`)
+todavía no existen allí, así que la serie efectiva empieza el 2009-03-02.
 
 Se descartaron rellenar con la media (destruye la estacionalidad), repetir el último valor
 (crea las mismas rachas planas que se buscan eliminar) e imputar con un modelo de ML (más
 complejo y propenso a fuga de datos, sin ventaja para huecos de pocos días). La imputación
-se aplica dentro de cada ventana de entrenamiento, nunca sobre la serie completa.
+se hace una sola vez sobre la serie recortada a 2009–2024; la sección
+[Prevención de fuga de datos](#prevención-de-fuga-de-datos) explica por qué eso no filtra
+información del futuro.
 
 ### Ubicación de las estaciones
 
@@ -169,7 +176,7 @@ flowchart LR
   ONI[NOAA ONI] --> EXO
   LOAD --> FEAT[features/<br/>formato long, calendario cíclico]
   EXO --> FEAT
-  FEAT --> BT[evaluation/backtest.py<br/>cross_validation h=14]
+  FEAT --> BT[evaluation/execution.py<br/>runners: ajuste y predicción por corte]
   BT --> M1[statsforecast<br/>Naive, SeasonalNaive, AutoARIMA]
   BT --> M2[mlforecast<br/>XGBoost]
   BT --> M3[neuralforecast<br/>LSTM, TCN, TFT]
@@ -195,9 +202,9 @@ Ejemplo:
 
 | unique_id | ds | y | ayacucho | caicara |
 |---|---|---|---|---|
-| ciudad_bolivar | 1974-01-01 | 6.89 | 43.34 | 24.98 |
-| ciudad_bolivar | 1974-01-02 | 6.78 | 43.25 | 24.88 |
-| palua | 1974-01-01 | 3.83 | 43.34 | 24.98 |
+| ciudad_bolivar | 2009-01-01 | 8.30 | 43.65 | 25.34 |
+| ciudad_bolivar | 2009-01-02 | 8.02 | 43.50 | 25.17 |
+| palua | 2009-01-01 | 4.93 | 43.65 | 25.34 |
 
 Los dos targets conviven en la misma tabla y se distinguen por `unique_id`. Esto permite
 entrenar **modelos globales**: un solo modelo que aprende de ambas series a la vez.
@@ -214,6 +221,10 @@ modelos se evalúen exactamente sobre los mismos cortes y con la misma lógica, 
 programar el ventaneo, el entrenamiento ni el backtesting por separado para cada familia.
 TimesFM no forma parte de Nixtla; se usa con su librería oficial y un adaptador convierte
 su salida al mismo formato.
+
+La ruta actual de ejecución no llama a `cross_validation`: cada runner ajusta en un corte
+(`evaluation/execution.py`) y la validación en varios cortes la hace
+`scripts/validate_cv.py`, que repite esa misma ejecución corte a corte.
 
 ### Rol de Polars
 
@@ -252,6 +263,26 @@ admite covariables históricas, igual que el LSTM y el TCN. Esto mantiene la com
 entre redes en igualdad de condiciones. La tabla de capacidades por modelo está en la
 [documentación de neuralforecast](https://nixtlaverse.nixtla.io/neuralforecast/docs/capabilities/overview.html).
 
+### Resultados en validación (XGBoost y TCN)
+
+Promedio de 24 cortes (2021-01-26 a 2022-12-17), MAE en metros y `rel_mae` contra Naive.
+El TCN es la media de 3 semillas. Detalle, hiperparámetros y limitaciones en
+[`docs/modelos_arboles_cnn.md`](docs/modelos_arboles_cnn.md).
+
+| Estación | Horizonte | Naive (MAE) | Booster (MAE / `rel_mae`) | TCN (MAE / `rel_mae`) |
+|---|---|---|---|---|
+| Ciudad Bolívar | día 7 | 0,526 | 0,279 / 0,53 | 0,279 / 0,53 |
+| Ciudad Bolívar | día 14 | 1,064 | 0,444 / 0,42 | 0,511 / 0,48 |
+| Ciudad Bolívar | días 1 a 14 | 0,570 | 0,278 / 0,49 | 0,294 / 0,52 |
+| Palúa | día 7 | 0,435 | 0,360 / 0,83 | 0,403 / 0,93 |
+| Palúa | día 14 | 0,891 | 0,548 / 0,62 | 0,631 / 0,71 |
+| Palúa | días 1 a 14 | 0,488 | 0,341 / 0,70 | 0,383 / 0,78 |
+
+Los dos modelos cumplen `rel_mae < 1` en cada estación y horizonte. El punto débil es el
+día 7 en Palúa, donde ganan poco a la persistencia. La lluvia y el ONI perjudican al TCN y
+no cambian al booster (ver el documento de modelos), por eso el booster usa todas las
+covariables y el TCN solo niveles (`drop_covariates`).
+
 ---
 
 ## Protocolo de evaluación
@@ -265,7 +296,7 @@ el tiempo se divide en bloques con funciones distintas:
 
 ```text
 |------------ entrenamiento ------------|--- validación ---|--- test final ---|
- 1974                                                    test_start      2025-02-24
+ 2009                                                    test_start      2024-12-31
 ```
 
 | Bloque | Para qué se usa | Qué modelos lo ven |
@@ -295,13 +326,40 @@ futuro y evaluaría con el pasado. La ruta de runners usa un corte cronológico:
 |---|---|---|
 | `horizon` (`h`) | 14 | Días que se pronostican desde el corte (1..14). |
 | `input_length` | 28 | Días de contexto de cada ventana supervisada. |
-| `test_start` | 2023-01-01 | Primer día del test final; desde aquí hasta 2025-02-24 queda reservado. |
+| `test_start` | 2023-01-01 | Primer día del test final; desde aquí hasta 2024-12-31 queda reservado. |
 | `seasonality` | 365 | Período de SeasonalNaive y escala del MASE. |
 | `n_windows` | 24 | Pliegues walk-forward que evalúa `--folds`. |
 | `step_size` | 30 | Días entre cortes consecutivos del barrido. |
 
 Estos valores viven únicamente en `configs/backtest.yaml` y los comparten todos los
-runners. El corte por defecto es `test_start - (horizon + 1)`.
+runners. El corte por defecto es `test_start - (horizon + 1)`. `n_windows` y `step_size` los
+lee solo `scripts/validate_cv.py`.
+
+### Validación en varios cortes (origen móvil)
+
+Un solo corte es una muestra muy ruidosa. `scripts/validate_cv.py` repite la ejecución de
+un runner y su comparación con Naive en 24 cortes y promedia las métricas por estación y
+horizonte (días 7, 14 y todos los pasos). Los cortes salen de `walk_forward_splits`
+(`data/splits.py`) sobre las fechas del historial limpio.
+
+| Bloque | Qué es |
+|---|---|
+| Entrenamiento | Todo `ds <= cutoff`; crece con cada corte. El runner se reajusta en cada corte. |
+| Validación | Los 14 días siguientes a cada corte; 24 cortes de 2021-01-26 a 2022-12-17, uno cada 30 días. |
+| Test final | `ds >= 2023-01-01`. No se ha evaluado nunca; se evalúa **una sola vez**, con el modelo ya elegido. `walk_forward_splits` falla si una ventana lo invade. |
+
+```bash
+uv run python scripts/validate_cv.py booster                       # 24 cortes, config de backtest.yaml
+uv run python scripts/validate_cv.py tcn --windows 6 --step 120    # prueba más barata
+uv run python scripts/validate_cv.py tcn --covariates levels       # solo exploración
+```
+
+`rel_mae` es el MAE medio del modelo dividido por el de Naive en los mismos cortes. A
+diferencia de la ruta anterior (un ajuste único con `refit: false`), aquí cada corte
+reentrena el modelo, así que la corrida cuesta más: el booster tarda minutos y el TCN con
+3 semillas, del orden de una hora para 24 cortes (estimado). `--covariates {all,levels,none}` sirve para
+explorar qué columnas ayudan; la elección permanente de cada modelo se declara en su YAML
+con `drop_covariates`.
 
 ### Barrido walk-forward: modelo contra baseline en los mismos pliegues
 
@@ -371,9 +429,9 @@ uno que favorezca al modelo preferido.
    modelo / MAE de Naive en el mismo corte) < 1. Al ser un cociente sin
    unidades, este control impide que Ciudad Bolívar, con niveles mayores, domine la
    elección. No se usa MASE < 1 porque su escala viene del historial de entrenamiento y
-   no del período evaluado: la propia persistencia obtiene MASE = 1,16 en Palúa en
-   2021–2022, así que el umbral dependería de cuán difícil fue la validación respecto
-   al historial. Si ningún modelo lo cumple, ese es el resultado principal del proyecto.
+   no del período evaluado: con los datos de la versión anterior (desde 1974) la propia
+   persistencia obtenía MASE = 1,16 en Palúa en 2021–2022, así que el umbral dependería de
+   cuán difícil fue la validación respecto al historial. Si ningún modelo lo cumple, ese es el resultado principal del proyecto.
 2. **Métrica principal:** MAE promedio de `h = 1` a `14`, promediado entre Ciudad Bolívar y
    Palúa, sobre el corte de validación.
 3. **Desempate**, si dos modelos quedan a pocos centímetros, en este orden:
@@ -444,16 +502,23 @@ Proyecto-IA-Orinoco/
 ├── notebooks/                   # Exploración y presentación de resultados
 ├── reports/figures/             # Gráficos finales
 ├── scripts/                     # Puntos de entrada por línea de comandos
-│   ├── run_model.py             # Ejecuta el backtest de un modelo configurado
+│   ├── run_model.py             # Ejecuta un runner contra una línea base en un corte
+│   ├── validate_cv.py           # Valida un runner en 24 cortes (origen móvil)
+│   ├── validate_predictions.py  # Recalcula estadísticas desde los parquet exportados
+│   ├── validate_processed_dataset.py  # Valida el parquet del dataset
 │   ├── run_ensemble.py          # Combina predicciones (experimento opcional)
 │   └── make_report.py           # Tablas comparativas, selección y test final
 ├── src/orinoco_forecast/        # Paquete Python del proyecto
 │   ├── data/
-│   │   ├── loading.py           # Lectura y validación de data/raw
-│   │   └── exogenous.py         # Descarga de NASA POWER / IMERG y ONI
+│   │   ├── loading.py           # Configuración y carga de niveles (2009-2024)
+│   │   ├── quality.py           # Etiquetas de calidad (observed, missing, suspect_*)
+│   │   ├── datasets.py          # Excel -> parquet con lluvia, ONI y rezagos
+│   │   ├── exogenous.py         # Alineación de NASA POWER y ONI
+│   │   ├── splits.py            # Cortes walk-forward de validación
+│   │   └── windows.py           # Ventanas supervisadas (build_windows)
 │   ├── features/
-│   │   ├── lags.py              # Lags de estaciones aguas arriba
-│   │   └── calendar.py          # Variables cíclicas (seno/coseno del día del año)
+│   │   ├── dataset.py           # Limpieza, Fourier, clean_history y drop_covariates
+│   │   └── lags.py              # Lags de estaciones aguas arriba
 │   ├── models/
 │   │   ├── statistical/         # Baselines y AutoARIMA (statsforecast)
 │   │   ├── trees/               # XGBoost (mlforecast)
@@ -461,8 +526,10 @@ Proyecto-IA-Orinoco/
 │   │   ├── pretrained/          # Adaptador de TimesFM
 │   │   └── registry.py          # Nombre de modelo -> objeto configurado
 │   ├── evaluation/
-│   │   ├── backtest.py          # Ejecuta cross_validation y guarda predicciones
-│   │   └── metrics.py           # MAE, RMSE, MASE, NSE, KGE
+│   │   ├── backtest.py          # Lectura de configs/backtest.yaml
+│   │   ├── execution.py         # Ejecuta un runner contra otro en un corte
+│   │   ├── validation.py        # Revalida predicciones exportadas
+│   │   └── metrics.py           # MAE, RMSE, MASE, NSE, KGE, rel_mae
 │   ├── ensemble/                # Promedio y stacking (experimento opcional)
 │   └── utils/                   # E/S, semillas, logging
 ├── tests/                       # Pruebas con pytest
@@ -492,11 +559,14 @@ reproduce leyendo sus YAML.
 - **`configs/data.yaml`**: cada fuente declara `name`, `path`, `format`, `date_column`,
   `target_column`, `freq` y, si aplica, `sheet`, `covariates` o `layout`. Para agregar una
   fuente nueva se coloca el archivo original en `data/raw/` y se registra aquí.
-- **`configs/backtest.yaml`**: única fuente de `horizon`, `input_length`, `test_start` y
-  `seasonality`. Ningún runner define su propio horizonte.
+- **`configs/backtest.yaml`**: única fuente de `horizon`, `input_length`, `test_start`,
+  `seasonality`, `n_windows` y `step_size`. Ningún runner define su propio horizonte.
+- **Sección `model_frame` de `configs/data.yaml`**: período válido (`start` 2009-01-01,
+  `end` 2024-12-31), `max_gap_days` (31) y covariables aguas arriba.
 - **`configs/models/*.yaml`**: hiperparámetros de cada familia (por ejemplo `input_size`,
-  `max_steps` y covariables para las redes; `lags` y parámetros de XGBoost para los
-  árboles).
+  `max_steps` para las redes; `lags` y parámetros de XGBoost para los árboles). La opción
+  `drop_covariates` (lista de prefijos de columna, por ejemplo `[rain_, oni]`) declara qué
+  covariables no ve el modelo; está en `tree.yaml` y `cnn.yaml`.
 
 ---
 
@@ -548,7 +618,16 @@ uv run python scripts/run_model.py arimax --against naive --cutoff 2022-12-17 --
 
 # Recalcula las estadísticas desde los parquet exportados, sin reentrenar.
 uv run python scripts/validate_predictions.py arimax --against naive
+
+# Validación en 24 cortes (origen móvil); ver "Validación en varios cortes".
+uv run python scripts/validate_cv.py booster
 ```
+
+La primera vez hace falta el parquet del dataset: se genera con
+`uv run python scripts/run_model.py <modelo> --write-dataset` (o
+`TimeSeriesDataset().write_parquet()`), y queda en `data/interim/orinoco_dataset.parquet`.
+`load_history` lo lee y le aplica `clean_history`: recorta a 2009–2024, anula las rachas
+planas, interpola huecos cortos y descarta los primeros días sin rezagos.
 
 Contrato:
 
@@ -573,8 +652,9 @@ result.write()  # data/predictions/<runner>/predictions.parquet
   `data/predictions/<runner>/backtest/<against>/{fold_predictions,fold_statistics,comparison}.parquet`
   y no toca los dos archivos anteriores. `--folds` y `--cutoff` son mutuamente
   excluyentes.
-- La etapa A/B de la comparación anterior queda fuera de esta ruta: siempre se usan lluvia
-  y ONI.
+- La etapa A/B de la comparación anterior queda reemplazada: los runners reciben todas las
+  columnas del dataset (rezagos de niveles, lluvia y ONI) y cada modelo oculta las que no
+  usa con `drop_covariates` en su YAML (`tree.yaml`: `[]`; `cnn.yaml`: `[rain_, oni]`).
 
 | Runner | Clave CLI | Estado |
 |---|---|---|
@@ -681,17 +761,18 @@ código entre notebooks.
 | Componente | Estado |
 |---|---|
 | Estructura de carpetas, configuración y entorno con uv | Disponible |
-| Auditoría de datos crudos (`data/raw/README.md`) | Disponible |
-| Carga y validación de datos (`data/loading.py`) | Disponible |
+| Auditoría de calidad de los niveles 2009–2024 (sección Calidad de los datos) | Disponible |
+| Carga de niveles desde `DATOS RIO ORINOCO.xlsx` (2009–2024) y limpieza (`data/loading.py`, `features/dataset.py`) | Disponible |
 | Alineación de NASA POWER y ONI (`data/exogenous.py`) | Disponible |
 | Formato long y variables predictoras (`features/`) | Disponible (rezagos de nivel y cambio diario; lluvia/ONI si la fuente las trae) |
 | Extracción a formato largo con columna `quality` | Disponible |
 | Métricas MAE, RMSE, MASE (por horizonte y estacional), NSE, KGE, MAE relativo, sMAPE, MAPE | Disponible |
 | Baselines Naive y SeasonalNaive | Disponible |
 | ARIMA / ARIMAX (statsmodels) | Runner `arimax` implementado; comparación walk-forward disponible |
-| XGBoost (mlforecast) | Runner `booster` implementado: devuelve solo la predicción |
-| TCN (neuralforecast) | Runner `tcn` implementado: devuelve solo la predicción |
+| XGBoost (mlforecast) | Runner `booster` implementado y validado en 24 cortes; reajustado con datos 2009–2024 |
+| TCN (neuralforecast) | Runner `tcn` implementado y validado en 24 cortes; solo niveles (`drop_covariates`) |
 | Arquitectura de runners (`fit`/`predict`, `write`) | Disponible |
+| Validación en 24 cortes (`scripts/validate_cv.py`) | Disponible |
 | Estadísticas de dos runners (`compute_statistics`) | Disponible |
 | Comparación walk-forward modelo vs baseline (`--folds`) | Disponible: 24 pliegues, mejora, dispersión y test de signos |
 | LSTM, TFT (neuralforecast) | Solo estructura (`NotImplementedError`) |
@@ -707,22 +788,22 @@ medir cuánto aportan.
 
 ### Construcción del dataset con variables externas
 
-Los archivos externos ya descargados en `data/external/` se combinan con
-`data/raw/Nivel Orinoco Formateado.csv` mediante:
+Los archivos de `data/external/` (NASA POWER y NOAA ONI) se combinan con los niveles de
+`data/raw/DATOS RIO ORINOCO.xlsx` mediante:
 
 ```bash
-uv run python scripts/build_exogenous_dataset.py
+uv run python scripts/run_model.py booster --write-dataset   # o TimeSeriesDataset().write_parquet()
 ```
 
-El resultado se escribe en `data/processed/orinoco_exogenous.parquet`. NASA POWER se
-alinea por fecha como `rain_<estacion>` y el ONI se convierte de sus promedios móviles
-trimestrales a una serie diaria mediante *forward fill*. Antes de esa expansión se aplica
-el retraso de publicación configurado en `configs/data.yaml` (tres meses), para evitar
-fuga de información. Los nulos de lluvia anteriores a 1981 se conservan y se reportan
-como `DataQualityWarning`; no se imputan automáticamente.
+El resultado se escribe en `data/interim/orinoco_dataset.parquet`
+(`TimeSeriesDataset.write_parquet`, `data/datasets.py`). NASA POWER se alinea por fecha como
+`rain_<estacion>` y el ONI se convierte de sus promedios móviles trimestrales a una serie
+diaria mediante *forward fill*. Antes de esa expansión se aplica el retraso de publicación
+configurado en `configs/data.yaml` (tres meses), para evitar fuga de información. Los nulos
+de lluvia anteriores a 1981 se conservan y se reportan como `DataQualityWarning`; no se
+imputan automáticamente (no afectan a 2009–2024).
 
-Con `BUILD_RIVER_FEATURES = True` (variable de control al inicio de
-`scripts/build_exogenous_dataset.py`), el script aplica además las features rezagadas
+Además de las columnas de nivel, lluvia y ONI, el parquet incluye las features rezagadas
 configuradas en `configs/data.yaml`:
 
 | Columna | Contenido |
@@ -732,7 +813,7 @@ configuradas en `configs/data.yaml`:
 | `ciudad_bolivar_lag_1` | Nivel de Ciudad Bolívar en `t - 1` (Palúa). |
 | `d_ayacucho_lag_3`, `d_caicara_lag_3` | Cambio diario `y(t) - y(t - 1)` en `t - 3`. |
 | `d_ciudad_bolivar_lag_1` | Cambio diario de Ciudad Bolívar en `t - 1`. |
-| `rain_<estacion>_lag_<n>`, `oni_lag_<n>` | Solo si la fuente trae lluvia/ONI; el Excel de niveles no las incluye. |
+| `rain_<estacion>_lag_<n>`, `oni_lag_<n>` | Rezagos de lluvia y ONI. |
 
 El conjunto exacto de rezagos por estación vive en `features.station_lags` y
 `features.diff_lags`. El calendario `sin_doy`/`cos_doy` está apagado
@@ -741,7 +822,9 @@ El conjunto exacto de rezagos por estación vive en `features.station_lags` y
 horizonte de 14 días, ARIMAX selecciona solo rezagos `>= min_exog_lag` (14 por
 defecto), de modo que cada exógena futura ya está observada en el corte. Los
 rezagos de 1, 3, 4 y 7 días quedan disponibles para modelos supervisados; en
-ARIMAX la inercia propia la aportan los términos AR.
+ARIMAX la inercia propia la aportan los términos AR. Estos rezagos tienen nulos al
+inicio de la serie (hasta 60 días en `oni_lag_60`): por eso `clean_history` descarta los
+primeros días de 2009.
 
 ---
 
