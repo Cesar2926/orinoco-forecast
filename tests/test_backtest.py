@@ -589,3 +589,36 @@ def test_cli_rejects_folds_together_with_a_cutoff() -> None:
 
     assert completed.returncode == 2
     assert "not allowed with" in completed.stderr
+
+
+def _seeded(result: BacktestResult, name: str) -> BacktestResult:
+    """Rename the model rows to per-seed names, as multi-seed runners emit."""
+    rename = pl.when(pl.col("model") == "naive").then(pl.lit(name)).otherwise(
+        pl.col("model")
+    )
+    return replace(
+        result,
+        predictions=result.predictions.with_columns(model=rename),
+        statistics=result.statistics.with_columns(model=rename),
+    )
+
+
+def test_backtest_result_accepts_per_seed_model_names() -> None:
+    result = _seeded(_result(), "NAIVE_s1")
+
+    assert result.model == "naive"
+    assert set(result.statistics["model"]) == {"NAIVE_s1", "seasonal_naive"}
+    assert not summarize_comparison(result.statistics).is_empty()
+
+
+def test_backtest_result_rejects_statistics_without_model_rows() -> None:
+    result = _result()
+    only_baseline = result.statistics.filter(pl.col("model") == "seasonal_naive")
+
+    with pytest.raises(ValueError, match="modelo"):
+        replace(result, statistics=only_baseline)
+
+
+def test_backtest_result_rejects_model_rows_of_another_runner() -> None:
+    with pytest.raises(ValueError, match="modelo"):
+        _seeded(_result(), "other_s1")

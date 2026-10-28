@@ -286,7 +286,13 @@ class BacktestResult:
         if self._cutoffs_by_fold(frame, "las estadísticas") != self._expected_cutoffs():
             raise ValueError("Cada fold de las estadísticas debe usar su cutoff.")
         models = set(frame["model"])
-        if self.model not in models or self.against not in models:
+        # Multi-seed runners emit one model per seed (TCN_s1, CNNLSTM_s1), so match
+        # the runner name ignoring case and underscores instead of equality.
+        stem = self.model.lower().replace("_", "")
+        if self.against not in models or not any(
+            m != self.against and m.lower().replace("_", "").startswith(stem)
+            for m in models
+        ):
             raise ValueError(
                 "Las estadísticas deben incluir el modelo y su runner de comparación."
             )
