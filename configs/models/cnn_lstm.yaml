@@ -20,6 +20,8 @@ conv_layers: 2
 # Recurrent part: the last hidden state feeds the linear head.
 lstm_hidden_size: 64
 lstm_layers: 1
+# Dropout before the linear head and between stacked LSTM layers (0 = off).
+dropout: 0.0
 
 # Optimisation: L1 loss on window-scaled targets (matches the MAE criterion).
 # Each window is scaled with the median/IQR of its own input part, never with

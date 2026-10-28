@@ -67,6 +67,7 @@ class CnnLstm(nn.Module):
         conv_layers: int,
         lstm_hidden_size: int,
         lstm_layers: int,
+        dropout: float = 0.0,
     ) -> None:
         super().__init__()
         blocks: list[nn.Module] = []
@@ -79,15 +80,21 @@ class CnnLstm(nn.Module):
             ]
             channels = conv_channels
         self.conv = nn.Sequential(*blocks)
+        # nn.LSTM only applies dropout between stacked layers.
         self.lstm = nn.LSTM(
-            conv_channels, lstm_hidden_size, lstm_layers, batch_first=True
+            conv_channels,
+            lstm_hidden_size,
+            lstm_layers,
+            batch_first=True,
+            dropout=dropout if lstm_layers > 1 else 0.0,
         )
+        self.dropout = nn.Dropout(dropout)
         self.head = nn.Linear(lstm_hidden_size, horizon)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         features = self.conv(x.transpose(1, 2)).transpose(1, 2)
         out, _ = self.lstm(features)
-        return self.head(out[:, -1])
+        return self.head(self.dropout(out[:, -1]))
 
 
 def reconstruct_levels(changes: torch.Tensor, y_cut: torch.Tensor) -> torch.Tensor:
@@ -211,6 +218,7 @@ class CnnLstmRunner:
             conv_layers=p["conv_layers"],
             lstm_hidden_size=p["lstm_hidden_size"],
             lstm_layers=p["lstm_layers"],
+            dropout=p.get("dropout", 0.0),
         ).to(device)
         optimiser = torch.optim.Adam(net.parameters(), lr=p["learning_rate"])
         # Seeded shuffle of independent windows; the split itself stays chronological.

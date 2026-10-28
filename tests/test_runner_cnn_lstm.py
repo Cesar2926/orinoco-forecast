@@ -176,3 +176,27 @@ def test_runner_is_registered() -> None:
     runner = get_runner("cnn_lstm")
     assert runner.name == "cnn_lstm"
     assert runner.implemented is True
+
+
+def test_dropout_only_acts_in_training_mode() -> None:
+    net = CnnLstm(
+        n_features=2,
+        horizon=3,
+        conv_channels=4,
+        kernel_size=3,
+        conv_layers=1,
+        lstm_hidden_size=8,
+        lstm_layers=2,
+        dropout=0.5,
+    )
+    x = torch.randn(4, 10, 2)
+    net.eval()
+    assert torch.equal(net(x), net(x))
+    net.train()
+    assert not torch.equal(net(x), net(x))
+
+
+def test_runner_accepts_dropout_param() -> None:
+    frame = _synthetic()
+    runner = _fit(frame, dropout=0.2)
+    assert runner.predict(frame, cutoff=CUTOFF, horizon=HORIZON).frame.height > 0
