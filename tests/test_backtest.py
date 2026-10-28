@@ -593,8 +593,10 @@ def test_cli_rejects_folds_together_with_a_cutoff() -> None:
 
 def _seeded(result: BacktestResult, name: str) -> BacktestResult:
     """Rename the model rows to per-seed names, as multi-seed runners emit."""
-    rename = pl.when(pl.col("model") == "naive").then(pl.lit(name)).otherwise(
-        pl.col("model")
+    rename = (
+        pl.when(pl.col("model") == "naive")
+        .then(pl.lit(name))
+        .otherwise(pl.col("model"))
     )
     return replace(
         result,
@@ -622,3 +624,8 @@ def test_backtest_result_rejects_statistics_without_model_rows() -> None:
 def test_backtest_result_rejects_model_rows_of_another_runner() -> None:
     with pytest.raises(ValueError, match="modelo"):
         _seeded(_result(), "other_s1")
+
+
+def test_backtest_result_rejects_a_model_that_only_shares_the_prefix() -> None:
+    with pytest.raises(ValueError, match="modelo"):
+        _seeded(_result(), "naive_extended")
