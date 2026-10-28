@@ -1,7 +1,7 @@
 """Validate a runner over many cutoffs (rolling origin) against a baseline.
 
 Usage: ``uv run python scripts/validate_cv.py <model> [--against naive]
-[--windows 24] [--step 30]``.
+[--windows N] [--step D]  (defaults: configs/backtest.yaml)``.
 
 Reuses ``run_runners`` (one fit per cutoff, no leakage) on the cleaned history
 and averages the per-cutoff statistics. Reports days 7 and 14 and all steps.
@@ -107,11 +107,12 @@ def validate_cv(
 
 
 def main() -> None:
+    cfg = load_backtest_config()
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("model", choices=available_runners())
     parser.add_argument("--against", default="naive", choices=available_runners())
-    parser.add_argument("--windows", type=int, default=24)
-    parser.add_argument("--step", type=int, default=30)
+    parser.add_argument("--windows", type=int, default=cfg["n_windows"])
+    parser.add_argument("--step", type=int, default=cfg["step_size"])
     parser.add_argument("--horizon", type=int, default=14)
     parser.add_argument(
         "--covariates",

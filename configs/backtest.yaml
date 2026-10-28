@@ -12,3 +12,8 @@ step_size: 30
 # Shared input window for build_windows. ML models may override it through their
 # own config; statistical runners use the contiguous history instead.
 input_length: 28
+# Rolling-origin validation (scripts/validate_cv.py). Cutoffs end at
+# test_start - horizon - 1 and go back step_size days per window. Not read by
+# the single-cutoff execution path.
+n_windows: 24
+step_size: 30
