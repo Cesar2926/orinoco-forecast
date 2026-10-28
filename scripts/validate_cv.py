@@ -25,8 +25,45 @@ from orinoco_forecast.models.registry import available_runners, get_runner
 REPORT = ("7", "14", "all")
 
 
+def select_covariates(frame: pl.DataFrame, covariates: str) -> pl.DataFrame:
+    """``all`` keeps every column; ``levels`` drops rain and ONI; ``none`` drops all."""
+    keep = {
+        "all": lambda c: True,
+        "levels": lambda c: not c.startswith(("rain_", "oni")),
+        "none": lambda c: c in {"unique_id", "ds", "y", "imputed"},
+    }[covariates]
+    return frame.select(c for c in frame.columns if keep(c))
+
+
+class CovariateFilter:
+    """Runner wrapper that hides covariate columns from the wrapped model.
+
+    ``build_windows_for`` needs rain/ONI in the shared frame, so the filter acts
+    only on what the model sees in ``fit`` and ``predict``.
+    """
+
+    def __init__(self, runner, covariates: str) -> None:
+        self._runner, self._covariates = runner, covariates
+        self.name, self.implemented = runner.name, runner.implemented
+
+    def fit(self, windows, frame, **kwargs):
+        self._runner.fit(windows, select_covariates(frame, self._covariates), **kwargs)
+        return self
+
+    def predict(self, frame, **kwargs):
+        return self._runner.predict(
+            select_covariates(frame, self._covariates), **kwargs
+        )
+
+
 def validate_cv(
-    model: str, against: str, *, windows: int, step: int, horizon: int
+    model: str,
+    against: str,
+    *,
+    windows: int,
+    step: int,
+    horizon: int,
+    covariates: str = "all",
 ) -> pl.DataFrame:
     """Mean MAE/RMSE per station, model and report horizon over all cutoffs."""
     cfg = load_backtest_config()
@@ -43,7 +80,7 @@ def validate_cv(
     for i, split in enumerate(splits, 1):
         print(f"corte {i}/{len(splits)}: {split.cutoff}", flush=True)
         result = run_runners(
-            get_runner(model),
+            CovariateFilter(get_runner(model), covariates),
             get_runner(against),
             frame,
             cutoff=split.cutoff,
@@ -76,6 +113,12 @@ def main() -> None:
     parser.add_argument("--windows", type=int, default=24)
     parser.add_argument("--step", type=int, default=30)
     parser.add_argument("--horizon", type=int, default=14)
+    parser.add_argument(
+        "--covariates",
+        choices=("all", "levels", "none"),
+        default="all",
+        help="Columnas de entrada: todas, solo niveles (sin lluvia/ONI) o ninguna.",
+    )
     args = parser.parse_args()
     table = validate_cv(
         args.model,
@@ -83,6 +126,7 @@ def main() -> None:
         windows=args.windows,
         step=args.step,
         horizon=args.horizon,
+        covariates=args.covariates,
     )
     with pl.Config(
         tbl_rows=-1,
