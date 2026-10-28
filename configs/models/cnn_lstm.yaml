@@ -1,0 +1,43 @@
+# Hybrid CNN-LSTM (orinoco_forecast.models.neural.cnn_lstm.CnnLstmRunner).
+# Causal Conv1d blocks extract features from the input window, an LSTM reads them
+# in order and a linear head predicts the horizon (configs/backtest.yaml). Custom
+# PyTorch: neuralforecast 3.3.0 has TCN and LSTM but no hybrid.
+
+# "difference" models the daily change and rebuilds levels from the level at the
+# cutoff (persistence = zero prediction), like the TCN; "level" models y directly.
+target_transform: difference
+
+# Days of history per window. Not tuned yet: 56 keeps CPU training affordable
+# (the TCN's best window was 112; Optuna can search 28/56/112).
+input_size: 56
+
+# Convolutional front end. Each block is Conv1d + ReLU with left padding, so an
+# output never sees later days.
+conv_channels: 32
+kernel_size: 3
+conv_layers: 2
+
+# Recurrent part: the last hidden state feeds the linear head.
+lstm_hidden_size: 64
+lstm_layers: 1
+
+# Optimisation: L1 loss on window-scaled targets (matches the MAE criterion).
+# Each window is scaled with the median/IQR of its own input part, never with
+# later data. Training windows are shuffled with a seeded generator.
+learning_rate: 0.002
+batch_size: 256
+max_epochs: 30
+
+# Early stopping on the last val_size days before the cutoff (windows whose
+# target lies entirely there; those days never update the weights). Patience
+# counts epochs without improvement; the best epoch is kept.
+val_size: 365
+early_stop_patience: 5
+
+# Covariate columns (by name prefix) hidden from the model; same option as the
+# booster and the TCN. Rain and ONI hurt the TCN in rolling validation.
+drop_covariates: [rain_, oni]
+
+# One network per seed on the same windows; columns CNNLSTM_s<seed>, reported
+# separately (predictions are not averaged).
+seeds: [1, 2, 3]
