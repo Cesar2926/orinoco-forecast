@@ -9,6 +9,7 @@ segment.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import date, timedelta
@@ -286,7 +287,13 @@ class BacktestResult:
         if self._cutoffs_by_fold(frame, "las estadísticas") != self._expected_cutoffs():
             raise ValueError("Cada fold de las estadísticas debe usar su cutoff.")
         models = set(frame["model"])
-        if self.model not in models or self.against not in models:
+        # Multi-seed runners emit one model per seed (TCN_s1, CNNLSTM_s1): accept
+        # the runner name or that name plus a seed suffix, ignoring case and "_".
+        seeded = re.compile(rf"{re.escape(self.model.lower().replace('_', ''))}(s\d+)?")
+        if self.against not in models or not any(
+            m != self.against and seeded.fullmatch(m.lower().replace("_", ""))
+            for m in models
+        ):
             raise ValueError(
                 "Las estadísticas deben incluir el modelo y su runner de comparación."
             )
