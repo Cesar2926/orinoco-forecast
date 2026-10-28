@@ -224,7 +224,7 @@ su salida al mismo formato.
 
 La ruta actual de ejecución no llama a `cross_validation`: cada runner ajusta en un corte
 (`evaluation/execution.py`) y la validación en varios cortes la hace
-`scripts/validate_cv.py`, que repite esa misma ejecución corte a corte.
+`scripts/run_model.py --folds`, que repite esa misma ejecución corte a corte.
 
 ### Rol de Polars
 
@@ -279,7 +279,11 @@ El TCN es la media de 3 semillas. Detalle, hiperparámetros y limitaciones en
 | Palúa | días 1 a 14 | 0,488 | 0,341 / 0,70 | 0,383 / 0,78 |
 
 Los dos modelos cumplen `rel_mae < 1` en cada estación y horizonte. El punto débil es el
-día 7 en Palúa, donde ganan poco a la persistencia. La lluvia y el ONI perjudican al TCN y
+día 7 en Palúa, donde ganan poco a la persistencia. El test de signos de `--folds` para el
+MAE del booster contra Naive (`sign_test_p`) lo confirma: Ciudad Bolívar gana con claridad
+(p = 0,0015 en todos los pasos, 0,0066 el día 7 y 0,00004 el día 14), pero en Palúa el día 7
+no hay evidencia estadística de que gane (p = 0,84; gana en 54 % de los cortes), el día 14
+sí (p = 0,0066) y en conjunto queda en el límite (p = 0,064). La lluvia y el ONI perjudican al TCN y
 no cambian al booster (ver el documento de modelos), por eso el booster usa todas las
 covariables y el TCN solo niveles (`drop_covariates`).
 
@@ -333,14 +337,15 @@ futuro y evaluaría con el pasado. La ruta de runners usa un corte cronológico:
 
 Estos valores viven únicamente en `configs/backtest.yaml` y los comparten todos los
 runners. El corte por defecto es `test_start - (horizon + 1)`. `n_windows` y `step_size` los
-lee solo `scripts/validate_cv.py`.
+lee `--folds`.
 
 ### Validación en varios cortes (origen móvil)
 
-Un solo corte es una muestra muy ruidosa. `scripts/validate_cv.py` repite la ejecución de
-un runner y su comparación con Naive en 24 cortes y promedia las métricas por estación y
-horizonte (días 7, 14 y todos los pasos). Los cortes salen de `walk_forward_splits`
-(`data/splits.py`) sobre las fechas del historial limpio.
+Un solo corte es una muestra muy ruidosa. `run_model.py --folds` repite la ejecución de
+un runner y su comparación con Naive en 24 cortes y agrega las métricas por estación y
+horizonte (pasos 1 a 14 y `all`; los días 7 y 14 son las filas `horizon = 7` y `14`). Los
+cortes salen de `walk_forward_splits` (`data/splits.py`) sobre las fechas del historial
+limpio.
 
 | Bloque | Qué es |
 |---|---|
@@ -349,17 +354,21 @@ horizonte (días 7, 14 y todos los pasos). Los cortes salen de `walk_forward_spl
 | Test final | `ds >= 2023-01-01`. No se ha evaluado nunca; se evalúa **una sola vez**, con el modelo ya elegido. `walk_forward_splits` falla si una ventana lo invade. |
 
 ```bash
-uv run python scripts/validate_cv.py booster                       # 24 cortes, config de backtest.yaml
-uv run python scripts/validate_cv.py tcn --windows 6 --step 120    # prueba más barata
-uv run python scripts/validate_cv.py tcn --covariates levels       # solo exploración
+uv run python scripts/run_model.py booster --against naive --folds   # 24 cortes, config de backtest.yaml
+uv run python scripts/run_model.py tcn --against naive --folds
 ```
+
+Las salidas quedan en `data/predictions/<modelo>/backtest/naive/` (`comparison.parquet`
+trae los pasos 1 a 14 y `all`).
 
 `rel_mae` es el MAE medio del modelo dividido por el de Naive en los mismos cortes. A
 diferencia de la ruta anterior (un ajuste único con `refit: false`), aquí cada corte
 reentrena el modelo, así que la corrida cuesta más: el booster tarda minutos y el TCN con
-3 semillas, del orden de una hora para 24 cortes (estimado). `--covariates {all,levels,none}` sirve para
-explorar qué columnas ayudan; la elección permanente de cada modelo se declara en su YAML
-con `drop_covariates`.
+3 semillas, del orden de una hora para 24 cortes (estimado). La elección de columnas de
+cada modelo se declara en su YAML con `drop_covariates`. El experimento que comparó
+covariables (6 y 24 cortes) se hizo con un script auxiliar equivalente, ya retirado, que
+aplicaba la misma lógica de `drop_covariates`; los resultados del TCN en 24 cortes salen
+de ese script y no se volvieron a ejecutar con `--folds`.
 
 ### Barrido walk-forward: modelo contra baseline en los mismos pliegues
 
@@ -503,7 +512,6 @@ Proyecto-IA-Orinoco/
 ├── reports/figures/             # Gráficos finales
 ├── scripts/                     # Puntos de entrada por línea de comandos
 │   ├── run_model.py             # Ejecuta un runner contra una línea base en un corte
-│   ├── validate_cv.py           # Valida un runner en 24 cortes (origen móvil)
 │   ├── validate_predictions.py  # Recalcula estadísticas desde los parquet exportados
 │   ├── validate_processed_dataset.py  # Valida el parquet del dataset
 │   ├── run_ensemble.py          # Combina predicciones (experimento opcional)
@@ -620,7 +628,7 @@ uv run python scripts/run_model.py arimax --against naive --cutoff 2022-12-17 --
 uv run python scripts/validate_predictions.py arimax --against naive
 
 # Validación en 24 cortes (origen móvil); ver "Validación en varios cortes".
-uv run python scripts/validate_cv.py booster
+uv run python scripts/run_model.py booster --against naive --folds
 ```
 
 La primera vez hace falta el parquet del dataset: se genera con
@@ -772,7 +780,7 @@ código entre notebooks.
 | XGBoost (mlforecast) | Runner `booster` implementado y validado en 24 cortes; reajustado con datos 2009–2024 |
 | TCN (neuralforecast) | Runner `tcn` implementado y validado en 24 cortes; solo niveles (`drop_covariates`) |
 | Arquitectura de runners (`fit`/`predict`, `write`) | Disponible |
-| Validación en 24 cortes (`scripts/validate_cv.py`) | Disponible |
+| Validación en 24 cortes (`run_model.py --folds`) | Disponible |
 | Estadísticas de dos runners (`compute_statistics`) | Disponible |
 | Comparación walk-forward modelo vs baseline (`--folds`) | Disponible: 24 pliegues, mejora, dispersión y test de signos |
 | LSTM, TFT (neuralforecast) | Solo estructura (`NotImplementedError`) |

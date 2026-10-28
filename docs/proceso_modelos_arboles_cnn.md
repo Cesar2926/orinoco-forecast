@@ -170,7 +170,7 @@ Cada ventana de 14 días queda separada de la siguiente (los cortes están a 30 
 que las 24 ventanas no se solapan.
 
 **Por qué reajustar en cada corte:** el runner de Daniel ajusta en un solo corte y
-`scripts/validate_cv.py` lo repite 24 veces. Así cada predicción es genuinamente fuera de
+`scripts/run_model.py --folds` lo repite 24 veces. Así cada predicción es genuinamente fuera de
 muestra, a costa de un tiempo mayor: el XGBoost tarda minutos y el TCN, con 3 semillas, del
 orden de una hora (estimado, no cronometrado). La versión anterior entrenaba una sola vez
 (`refit: false`) y evaluaba 24 ventanas con esos pesos.
@@ -201,7 +201,8 @@ hoy. Para un río tan lento es un rival difícil: su error promedio en los 24 co
 | NSE, KGE | Métricas estándar de hidrología; 1 es perfecto |
 | **MAE relativo** (`rel_mae`) | MAE del modelo dividido por el MAE de la persistencia **en los mismos cortes** |
 
-`validate_cv.py` reporta MAE, RMSE, NSE y `rel_mae` en los días 7, 14 y el total. El NSE sale
+`--folds` reporta MAE, RMSE, NSE y `rel_mae` por paso del horizonte (los días 7 y 14 son
+los pasos 7 y 14) y en el total. El NSE sale
 negativo (también para la persistencia) porque cada ventana dura 14 días y su varianza
 interna es pequeña; por eso se lee `rel_mae`.
 
@@ -251,7 +252,7 @@ para predecir pasado mañana y acumula el error día tras día.
 2. Se entrenan 14 modelos XGBoost, uno por día del horizonte, con los datos hasta el corte.
 3. Se construyen las variables del corte con los datos observados y cada modelo predice su
    día; el runner devuelve las predicciones de los días 1 a 14.
-4. `validate_cv.py` repite eso en los 24 cortes y promedia las métricas.
+4. `--folds` repite eso en los 24 cortes y promedia las métricas.
 
 ### Configuración final
 
@@ -326,7 +327,7 @@ también usan el cambio diario.
 4. Se repite con **3 semillas** (inicializaciones aleatorias distintas) sobre las mismas
    ventanas. Una red da resultados distintos según su inicialización, así que se reporta el
    promedio y la desviación. Una diferencia menor que esa desviación no se interpreta.
-5. Con la red entrenada se pronostican los 14 días del corte. `validate_cv.py` repite el
+5. Con la red entrenada se pronostican los 14 días del corte. `--folds` repite el
    proceso en los 24 cortes.
 
 No hace falta GPU ni Colab; se probó en CPU.
@@ -443,8 +444,8 @@ uv run python scripts/run_model.py booster --against naive
 uv run python scripts/run_model.py tcn --against naive
 
 # Validación de 24 cortes (n_windows y step_size en configs/backtest.yaml)
-uv run python scripts/validate_cv.py booster
-uv run python scripts/validate_cv.py tcn
+uv run python scripts/run_model.py booster --against naive --folds
+uv run python scripts/run_model.py tcn --against naive --folds
 
 # Dashboard para explorar los resultados de run_model.py
 make dashboard
@@ -456,6 +457,6 @@ make dashboard
 | Limpieza y período | `configs/data.yaml`, `src/orinoco_forecast/features/dataset.py` |
 | Hiperparámetros y `drop_covariates` | `configs/models/tree.yaml`, `configs/models/cnn.yaml` |
 | Modelos | `src/orinoco_forecast/models/trees/tree.py`, `src/orinoco_forecast/models/neural/cnn.py` |
-| Ejecución, métricas y validación | `src/orinoco_forecast/evaluation/`, `scripts/validate_cv.py` |
+| Ejecución, métricas y validación | `src/orinoco_forecast/evaluation/`, `scripts/run_model.py` |
 | Resultados del ajuste | `reports/tuning/` |
 | Predicciones de un corte | `data/predictions/<runner>/` |

@@ -8,8 +8,9 @@ plan de los seis modelos en [`plan_modelos.md`](plan_modelos.md). El proceso pas
 (decisiones, datos y entrenamiento) está en
 [`proceso_modelos_arboles_cnn.md`](proceso_modelos_arboles_cnn.md).
 
-Los números de resultados salen de `scripts/validate_cv.py` y de los CSV de
-`reports/tuning/`. Las predicciones (`data/predictions/`) no se versionan en git: se
+Los números de resultados son los 24 cortes de `scripts/run_model.py --folds` (el
+booster se verificó con esa ruta; el TCN y los experimentos de covariables salieron de un
+script auxiliar equivalente, ya retirado) y los CSV de `reports/tuning/`. Las predicciones (`data/predictions/`) no se versionan en git: se
 regeneran con los comandos de la sección 9.
 
 ---
@@ -38,7 +39,7 @@ el ONI perjudican a la TCN y no cambian al XGBoost; por eso la TCN usa solo nive
 |---|---|---|
 | Datos | `Niveles Orinoco.xlsx` desde 1974 (37 366 filas) | `DATOS RIO ORINOCO.xlsx`, hoja `Entrenar`, solo 2009-01-01 a 2024-12-31 (período válido según el profesor) |
 | Ejecución | Scripts propios con `--stage A/B` y `cross_validation` de Nixtla | Runners de Daniel (`scripts/run_model.py`, `fit`/`predict` en un corte) |
-| Validación | Un ajuste único (`refit: false`) y 24 ventanas evaluadas | 24 cortes con reajuste en cada uno (`scripts/validate_cv.py`) |
+| Validación | Un ajuste único (`refit: false`) y 24 ventanas evaluadas | 24 cortes con reajuste en cada uno (`scripts/run_model.py --folds`) |
 | Horizontes | Promedio de 14 días | Se reportan además los días 7 y 14 |
 | Etapas A y B | Dos conjuntos de variables (río / río + lluvia + ONI) | Reemplazadas por `drop_covariates` en cada YAML |
 | Ciudad Bolívar | No era covariable | `ciudad_bolivar_lag_1` y `d_ciudad_bolivar_lag_1` están entre las columnas de rezagos del parquet |
@@ -138,8 +139,8 @@ genuina.
 | NSE | Eficiencia de Nash-Sutcliffe ([1970](https://explore.openalex.org/works/w2033904036)); 1 es perfecto, 0 equivale a predecir la media. |
 | KGE | Eficiencia de Kling-Gupta ([Gupta et al. 2009](https://ag.purdue.edu/hydrology/wiki/environmental-informatics/modeling-resources/attachments/gupta-et-al-2009.pdf)). |
 
-`validate_cv.py` reporta MAE, RMSE, NSE y `rel_mae` promediados sobre los 24 cortes, para
-los días 7, 14 y el total (pasos 1 a 14). **El NSE sale negativo** también para Naive
+`--folds` reporta MAE, RMSE, NSE y `rel_mae` promediados sobre los 24 cortes, para
+los pasos 1 a 14 y el total (`comparison.parquet`; los días 7 y 14 son los pasos 7 y 14). **El NSE sale negativo** también para Naive
 (entre −2,5 y −3,3 en el total): cada ventana dura 14 días y su varianza interna es
 pequeña, así que el NSE por ventana castiga cualquier error. Es mejor leer `rel_mae`.
 
@@ -311,7 +312,7 @@ se guardaron en `artifacts/optuna/` (no versionado) y las pruebas en
 `reports/tuning/xgboost_trials.csv` y `reports/tuning/tcn_trials.csv`.
 
 **Importante:** Optuna evaluó con el protocolo anterior (un ajuste único y 12 ventanas),
-mientras que `validate_cv.py` reajusta el modelo en cada corte. Los parámetros siguen
+mientras que `--folds` reajusta el modelo en cada corte. Los parámetros siguen
 siendo válidos, pero la medición no es idéntica.
 
 ### Resultados del ajuste (datos 2009–2024)
@@ -331,8 +332,9 @@ El CSV de XGBoost tiene 21 filas porque el estudio terminó con una prueba en es
 
 Promedios sobre los 24 cortes de validación (2021-01-26 a 2022-12-17). MAE en metros.
 TCN: media entre 3 semillas (± desviación entre semillas). Booster: sin desviación porque es
-una sola corrida con `random_state: 42`. Fuente: `scripts/validate_cv.py` con los hiperparámetros de la
-sección 7.
+una sola corrida con `random_state: 42`. Fuente: `run_model.py --folds` para el booster (reproduce estos
+números exactamente) y un script auxiliar equivalente, ya retirado, para el TCN (no se
+volvió a ejecutar con `--folds`), con los hiperparámetros de la sección 7.
 
 ### Resultados por estación y horizonte
 
@@ -361,6 +363,13 @@ desviación entre semillas de la TCN (0,037), así que ahí no es concluyente; e
 en Palúa**: `rel_mae` de 0,83 (XGBoost) y 0,93 (TCN), es decir, solo una ganancia pequeña
 sobre la persistencia. La elección final corresponde al equipo, comparando con los otros
 modelos.
+
+**Significancia estadística (test de signos de `--folds`, MAE del booster contra Naive).**
+En Ciudad Bolívar la ventaja es clara: `sign_test_p` 0,0015 en los pasos 1 a 14, 0,0066 el
+día 7 y 0,00004 el día 14. En Palúa el día 14 también (p = 0,0066), pero el **día 7 no
+muestra evidencia de que el booster gane a Naive** (p = 0,84; gana en 54 % de los cortes) y
+en los pasos 1 a 14 queda en el límite (p = 0,064, gana en 71 %). Que el `rel_mae` medio
+sea menor que 1 no basta para afirmar una ventaja sistemática en Palúa a 7 días.
 
 ### Qué aportan la lluvia y el ONI
 
@@ -406,7 +415,7 @@ protocolo (cortes, datos limpios, horizonte, métricas) es el mismo para todos.
 - **Entrenan con las cuatro estaciones.** `execute` pasa a los runners las cuatro series y
   filtra la predicción a las dos objetivo; la TCN y el XGBoost aprenden también de
   Ayacucho y Caicara. No se probó qué pasa si se entrenan solo con las dos objetivo.
-- **Reajuste en cada corte.** `validate_cv.py` reentrena en cada corte, distinto del
+- **Reajuste en cada corte.** `--folds` reentrena en cada corte, distinto del
   protocolo anterior (un ajuste único) con el que Optuna eligió los hiperparámetros. El TCN
   con 24 cortes y 3 semillas tarda del orden de una hora en CPU (estimado; no se midió con
   cronómetro).
@@ -438,12 +447,13 @@ uv run python scripts/run_model.py booster --write-dataset
 uv run python scripts/run_model.py booster --against naive
 uv run python scripts/run_model.py tcn --against naive
 
-# Validación de 24 cortes (n_windows y step_size en configs/backtest.yaml)
-uv run python scripts/validate_cv.py booster
-uv run python scripts/validate_cv.py tcn
+# Validación de 24 cortes (n_windows y step_size en configs/backtest.yaml);
+# salidas en data/predictions/<modelo>/backtest/naive/
+uv run python scripts/run_model.py booster --against naive --folds
+uv run python scripts/run_model.py tcn --against naive --folds
 
-# Experimento de covariables (solo exploración)
-uv run python scripts/validate_cv.py tcn --windows 6 --step 120 --covariates levels
+# Las columnas que ve cada modelo se declaran en su YAML (drop_covariates).
+# El experimento de covariables se hizo con un script auxiliar equivalente, ya retirado, que aplicaba la misma lógica que `drop_covariates`.
 
 # Tablero (lee data/predictions/<runner>/*.parquet generados por run_model.py)
 uv run streamlit run app/dashboard.py
