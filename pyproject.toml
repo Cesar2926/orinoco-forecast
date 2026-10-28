@@ -48,6 +48,10 @@ src = ["src"]
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
 
+[tool.ruff.lint.per-file-ignores]
+# Narrative text cells and printed tables are not worth wrapping at 88 columns.
+"notebooks/*.ipynb" = ["E501"]
+
 [tool.ruff.format]
 quote-style = "double"
 
