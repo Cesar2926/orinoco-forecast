@@ -22,7 +22,7 @@ covariate_lags: [14, 28, 56, 90] # ajustado con Optuna: 20 pruebas, ventanas de 
 drop_covariates: []
 
 xgb_params:
-  # Search space and trials: evaluation/tuning.py, reports/tuning/xgboost_trials.csv.
+  # Search space and trials: reports/tuning/xgboost_trials.csv (code: commit b87533d).
   n_estimators: 300 # ajustado con Optuna: 20 pruebas, ventanas de ajuste 2020, datos 2009-2024, objetivo rel_mae medio
   learning_rate: 0.0133 # ajustado con Optuna: 20 pruebas, ventanas de ajuste 2020, datos 2009-2024, objetivo rel_mae medio
   # Interaction depth (XGBoost default).

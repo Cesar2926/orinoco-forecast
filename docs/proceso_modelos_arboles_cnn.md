@@ -375,8 +375,8 @@ estaciones.
 | XGBoost | 0,490 | Ciudad Bolívar 0,437, Palúa 0,543; modelo más regularizado que antes |
 | TCN | 0,606 | Ciudad Bolívar 0,669, Palúa 0,542; 7 configuraciones podadas por campo receptivo menor que la ventana de entrada |
 
-El código de Optuna (`scripts/tune_model.py`) vive en la rama `feat/datos-2009-2024`; Daniel
-lo eliminó de `main`. Optuna evaluó con el protocolo anterior (un ajuste único y 12
+El código de Optuna (`scripts/tune_model.py`) se recupera del commit `b87533d` de `main`
+(PR #7); Daniel lo eliminó después. Optuna evaluó con el protocolo anterior (un ajuste único y 12
 ventanas); la validación final reajusta en cada corte, así que los parámetros son válidos
 pero la medición no es idéntica.
 

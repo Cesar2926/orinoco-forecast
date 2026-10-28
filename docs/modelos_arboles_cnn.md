@@ -304,8 +304,9 @@ eficiente que una búsqueda aleatoria cuando el presupuesto es pequeño.
   Avanzan 23 días y no 30 porque el hueco imputado de 2020 (Ciudad Bolívar, 2020-03-24 a
   2020-04-11) impide cortes a menos de 14 días de filas imputadas.
 
-El código de Optuna (`evaluation/tuning.py`, `scripts/tune_model.py`) vive en la rama
-`feat/datos-2009-2024`; Daniel lo eliminó de `main` al rehacer los runners. Los estudios
+El código de Optuna (`evaluation/tuning.py`, `scripts/tune_model.py`) está en el historial
+de `main` en el commit `b87533d` (PR #7); Daniel lo eliminó al rehacer los runners. El
+reajuste de 2009-2024 usó esa versión más una opción `--tag` para separar los estudios. Los estudios
 se guardaron en `artifacts/optuna/` (no versionado) y las pruebas en
 `reports/tuning/xgboost_trials.csv` y `reports/tuning/tcn_trials.csv`.
 
@@ -448,8 +449,8 @@ uv run python scripts/validate_cv.py tcn --windows 6 --step 120 --covariates lev
 uv run streamlit run app/dashboard.py
 ```
 
-El ajuste de hiperparámetros con Optuna (`scripts/tune_model.py`) solo existe en la rama
-`feat/datos-2009-2024`; sus resultados están en `reports/tuning/`. Tiempos medidos en CPU
+El ajuste de hiperparámetros con Optuna (`scripts/tune_model.py`) ya no está en `main`;
+se recupera del commit `b87533d`. Sus resultados están en `reports/tuning/`. Tiempos medidos en CPU
 (sin GPU): XGBoost, minutos para 24 cortes; TCN con 3 semillas, del orden de una hora para 24
 cortes (estimado).
 
