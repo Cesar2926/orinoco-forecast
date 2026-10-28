@@ -17,6 +17,7 @@ import polars as pl
 from orinoco_forecast.data.datasets import TimeSeriesDataset
 from orinoco_forecast.data.windows import build_windows
 from orinoco_forecast.evaluation.metrics import StatisticsResult, compute_statistics
+from orinoco_forecast.features.dataset import clean_history
 from orinoco_forecast.models.base import (
     DEFAULT_HORIZON,
     PredictionResult,
@@ -71,7 +72,7 @@ def load_history(path: str | Path | None = None) -> pl.DataFrame:
             "Regenéralo con `TimeSeriesDataset().write_parquet()` (incluye "
             "lluvia y ONI por defecto)."
         )
-    return frame.sort("unique_id", "ds")
+    return clean_history(frame)
 
 
 def default_cutoff(cfg: dict[str, Any], horizon: int) -> date:

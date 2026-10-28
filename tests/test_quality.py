@@ -110,38 +110,25 @@ def test_default_thresholds_come_from_config() -> None:
     assert out["quality"].cast(pl.String).to_list() == ["observed", "suspect_jump"]
 
 
+PERIOD = (date(2009, 1, 1), date(2024, 12, 31))
+
+
 @pytest.fixture(scope="module")
-def labelled(primary: pl.DataFrame, historical: pl.DataFrame) -> pl.DataFrame:
+def labelled(primary: pl.DataFrame) -> pl.DataFrame:
+    period = primary.filter(pl.col("ds").is_between(*PERIOD))
     with pytest.warns(UserWarning, match="suspect_flat"):
-        return label_quality(primary, reference=historical, thresholds=THRESHOLDS)
-
-
-def _count(df: pl.DataFrame, uid: str, label: str, years: tuple[int, int]) -> int:
-    return df.filter(
-        (pl.col("unique_id") == uid)
-        & (pl.col("quality") == label)
-        & pl.col("ds").dt.year().is_between(*years)
-    ).height
+        return label_quality(period, thresholds=THRESHOLDS)
 
 
 def test_real_palua_missing(labelled: pl.DataFrame) -> None:
-    assert _count(labelled, "palua", "missing", (1974, 2025)) == 17
+    missing = labelled.filter(pl.col("quality") == "missing")
+    assert missing["unique_id"].unique().to_list() == ["palua"]
+    assert missing.height == 3
 
 
-def test_real_ciudad_bolivar_conflicts(labelled: pl.DataFrame) -> None:
-    assert _count(labelled, "ciudad_bolivar", "source_conflict", (1987, 1987)) >= 150
-    assert _count(labelled, "ciudad_bolivar", "source_conflict", (1997, 1997)) >= 300
-    recent = _count(labelled, "ciudad_bolivar", "source_conflict", (1998, 2025))
-    n_recent = labelled.filter(
-        (pl.col("unique_id") == "ciudad_bolivar")
-        & pl.col("ds").dt.year().is_between(1998, 2025)
-    ).height
-    assert recent / n_recent < 0.01
-
-
-def test_real_conflicts_only_on_reference_station(labelled: pl.DataFrame) -> None:
-    others = labelled.filter(pl.col("unique_id") != "ciudad_bolivar")
-    assert others.filter(pl.col("quality") == "source_conflict").height == 0
+def test_real_no_source_conflict_without_reference(labelled: pl.DataFrame) -> None:
+    # The 1930-2025 reference workbook no longer exists: no conflicts are computed.
+    assert labelled.filter(pl.col("quality") == "source_conflict").height == 0
 
 
 def test_find_flat_runs_detects_run_of_min_days() -> None:
@@ -157,16 +144,21 @@ def test_find_flat_runs_ignores_changing_and_short_runs() -> None:
     assert find_flat_runs(pl.Series([float(i) for i in range(20)]), 2).sum() == 0
 
 
-@pytest.mark.parametrize(
-    ("uid", "start", "length"),
-    [("ciudad_bolivar", date(2020, 3, 25), 19), ("palua", date(1996, 4, 8), 16)],
-)
-def test_find_flat_runs_real_data(
-    primary: pl.DataFrame, uid: str, start: date, length: int
-) -> None:
-    series = primary.filter(pl.col("unique_id") == uid)
-    mask = find_flat_runs(series["y"], 10)
-    flagged = series.filter(mask)["ds"]
-    run = [start + timedelta(days=i) for i in range(length)]
-    assert set(run) <= set(flagged.to_list())
-    assert start - timedelta(days=1) not in flagged.to_list()
+FLAT_RUNS = {
+    "ayacucho": [(date(2019, 3, 7), 12)],
+    "caicara": [],
+    "ciudad_bolivar": [(date(2020, 3, 24), 19)],
+    "palua": [],
+}
+
+
+@pytest.mark.parametrize("uid", sorted(FLAT_RUNS))
+def test_find_flat_runs_real_data(primary: pl.DataFrame, uid: str) -> None:
+    series = primary.filter(
+        (pl.col("unique_id") == uid) & pl.col("ds").is_between(*PERIOD)
+    )
+    flagged = series.filter(find_flat_runs(series["y"], 10))["ds"].to_list()
+    expected = [
+        start + timedelta(days=i) for start, n in FLAT_RUNS[uid] for i in range(n)
+    ]
+    assert flagged == expected

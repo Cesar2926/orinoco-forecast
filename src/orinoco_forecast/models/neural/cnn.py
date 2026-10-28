@@ -17,7 +17,11 @@ from neuralforecast.losses import pytorch as losses
 from neuralforecast.models import TCN
 
 from orinoco_forecast.data.loading import load_config, repo_root
-from orinoco_forecast.features.dataset import NON_FEATURE_COLUMNS, fourier_terms
+from orinoco_forecast.features.dataset import (
+    NON_FEATURE_COLUMNS,
+    drop_covariates,
+    fourier_terms,
+)
 from orinoco_forecast.models.base import (
     DEFAULT_HORIZON,
     PredictionResult,
@@ -188,6 +192,7 @@ class TCNRunner:
         history = frame.filter(pl.col("ds") <= cutoff).sort("unique_id", "ds")
         if history.is_empty():
             raise ValueError(f"No hay observaciones hasta el corte {cutoff}.")
+        history = drop_covariates(history, self.params.get("drop_covariates", []))
         transform = self.params.get("target_transform", "level")
         data, futr, hist = prepare_frame(history, transform)
         val_size = int(self.params["val_size"])
