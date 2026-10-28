@@ -110,7 +110,8 @@ def robust_scale(
     Returns the scaled window and the median and IQR of channel 0 (the target),
     which scale the targets and undo the scaling of the predictions.
     """
-    q = torch.quantile(x, torch.tensor([0.25, 0.5, 0.75], dtype=x.dtype), dim=1)
+    probs = torch.tensor([0.25, 0.5, 0.75], dtype=x.dtype, device=x.device)
+    q = torch.quantile(x, probs, dim=1)
     median, iqr = q[1], (q[2] - q[0]).clamp_min(MIN_SCALE)
     return (x - median[:, None]) / iqr[:, None], median[:, 0], iqr[:, 0]
 
