@@ -44,6 +44,7 @@ def test_available_runners_are_the_canonical_catalog() -> None:
     assert available_runners() == [
         "arimax",
         "booster",
+        "cnn_lstm",
         "naive",
         "nsmt",
         "seasonal_naive",

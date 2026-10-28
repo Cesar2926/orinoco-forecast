@@ -82,9 +82,16 @@ def _tcn() -> Runner:
     return TCNRunner()
 
 
+def _cnn_lstm() -> Runner:
+    from orinoco_forecast.models.neural.cnn_lstm import CnnLstmRunner
+
+    return CnnLstmRunner()
+
+
 RUNNERS: dict[str, Callable[[], Runner]] = {
     "arimax": _arimax,
     "booster": _booster,
+    "cnn_lstm": _cnn_lstm,
     "naive": _naive,
     "nsmt": _nsmt,
     "seasonal_naive": _seasonal_naive,
