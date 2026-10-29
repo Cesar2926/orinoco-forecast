@@ -1,6 +1,22 @@
-# Inference-only dependency is optional: `uv sync --extra timesfm`.
-# The google/timesfm-3.0-pytorch weights are non-commercial/non-production.
+# TimesFM 3.0 zero-shot (orinoco_forecast.models.pretrained.timesfm.
+# TimesFM3Runner). Google's pretrained foundation model: nothing is trained on
+# Orinoco data, the history up to the cutoff is the context.
+# Optional dependency: `uv sync --extra timesfm` (timesfm 3.0.2, API
+# timesfm.TimesFM3Forecaster). The google/timesfm-3.0-pytorch weights are
+# non-commercial / non-production; they download to the Hugging Face cache.
 checkpoint: google/timesfm-3.0-pytorch
-inference_only: true
+# "auto" lets the library pick (GPU when available); or "cuda" / "cpu".
 device: auto
-per_core_batch_size: 8
+
+# Days of history fed as context (the model accepts up to 15 360). Grid for the
+# zero-shot search: 512 / 1024 / 2048. Starting value, not tuned yet.
+context_len: 1024
+
+# Pass the covariate columns left by drop_covariates as past-only covariates
+# (values up to the cutoff only). Off: univariate, the pure zero-shot baseline.
+use_covariates: false
+# Same covariate policy as the TCN and the CNN-LSTM: river levels only.
+drop_covariates: [rain_, oni]
+
+# Average the forecast of the series and its sign-flipped copy.
+use_symmetric_averaging: false
