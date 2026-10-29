@@ -221,6 +221,84 @@ def selection_table(metrics: pl.DataFrame) -> pl.DataFrame:
     )
 
 
+def fold_station_mae(
+    fold_comparison: pl.DataFrame, horizon: str = "all"
+) -> pl.DataFrame:
+    """MAE medio de los 24 cortes por modelo (semillas promediadas) y estación.
+
+    Naive se añade como fila propia a partir de ``mean_baseline``.
+    """
+    mae = fold_comparison.filter(
+        (pl.col("metric") == "mae") & (pl.col("horizon") == horizon)
+    )
+    if mae.is_empty():
+        return pl.DataFrame()
+    models = mae.group_by("source", "unique_id").agg(
+        mae=pl.col("mean_model").mean(),
+        mae_std_seeds=pl.col("mean_model").std(),
+        naive=pl.col("mean_baseline").first(),
+        win_rate=pl.col("win_rate").mean(),
+        p_min=pl.col("sign_test_p").min(),
+        p_max=pl.col("sign_test_p").max(),
+    )
+    naive = models.group_by("unique_id").agg(pl.col("naive").first().alias("mae"))
+    naive = naive.with_columns(source=pl.lit(BASELINES), naive=pl.col("mae"))
+    return (
+        pl.concat([models, naive], how="diagonal_relaxed")
+        .with_columns(rel_mae=pl.col("mae") / pl.col("naive"))
+        .rename({"source": "model"})
+        .sort("unique_id", "mae")
+    )
+
+
+def fold_ranking(fold_comparison: pl.DataFrame) -> pl.DataFrame:
+    """Criterio del README sobre los 24 cortes: ``rel_mae < 1`` y menor MAE medio."""
+    per_station = fold_station_mae(fold_comparison)
+    if per_station.is_empty():
+        return pl.DataFrame()
+    stations = sorted(per_station["unique_id"].unique())
+    wide = per_station.pivot(on="unique_id", index="model", values="mae").rename(
+        {s: f"mae_{s}" for s in stations}
+    )
+    ranking = (
+        per_station.group_by("model")
+        .agg(
+            beats_naive=(pl.col("rel_mae") < 1).all() & (pl.len() == len(stations)),
+            mean_mae=pl.col("mae").mean(),
+        )
+        .join(wide, on="model")
+        .with_columns(
+            pl.when(pl.col("model") == BASELINES)
+            .then(None)
+            .otherwise(pl.col("beats_naive"))
+            .alias("beats_naive")
+        )
+        .sort(
+            pl.col("beats_naive").fill_null(False), "mean_mae", descending=[True, False]
+        )
+    )
+    return ranking.with_row_index("rank", offset=1).select(
+        "rank", "model", "beats_naive", "mean_mae", *(f"mae_{s}" for s in stations)
+    )
+
+
+def fold_horizon_errors(fold_comparison: pl.DataFrame, unique_id: str) -> pl.DataFrame:
+    """MAE medio de los 24 cortes por día de horizonte (1..14) de una estación."""
+    rows = fold_comparison.filter(
+        (pl.col("unique_id") == unique_id) & (pl.col("horizon") != "all")
+    )
+    if rows.is_empty():
+        return pl.DataFrame()
+    return (
+        pl.concat(
+            fold_station_mae(rows, h).with_columns(horizon=pl.lit(int(h)))
+            for h in rows["horizon"].unique()
+        )
+        .select("model", "horizon", "mae", "rel_mae")
+        .sort("model", "horizon")
+    )
+
+
 def horizon_errors(metrics: pl.DataFrame, unique_id: str) -> pl.DataFrame:
     """MAE por día de horizonte (1..14) de una estación, en formato largo."""
     return (

@@ -256,6 +256,11 @@ def test_load_fold_comparison_and_timeline(root: Path) -> None:
     fold_stats.write_parquet(comp_dir / "fold_statistics.parquet")
 
     loaded = data.load_fold_comparison(root, data.discover_models(root))
+    ranking = data.fold_ranking(loaded)
+    assert ranking["model"].to_list() == ["arimax", "naive"]
+    assert ranking["beats_naive"].to_list() == [True, None]
+    assert ranking["mean_mae"].to_list() == pytest.approx([0.30, 0.50])
+    assert charts.ranking_chart(data.fold_station_mae(loaded)) is not None
     assert loaded.height == len(STATIONS)
     assert {"family", "rel_mae", "source"} <= set(loaded.columns)
     assert loaded["rel_mae"][0] == pytest.approx(0.30 / 0.50)
@@ -364,7 +369,7 @@ def test_app_runs_with_runner_outputs(
 ) -> None:
     at = _app(monkeypatch, root)
     assert not at.exception
-    assert len(at.tabs) == 4
+    assert len(at.tabs) == 5
     models = at.multiselect(key="h_models").options
     assert "arimax" in models and "TCN_s1" in models
 

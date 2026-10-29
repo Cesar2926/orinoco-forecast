@@ -745,8 +745,9 @@ result.write()  # data/predictions/<runner>/predictions.parquet
 
 ### Dashboard
 
-El tablero de Streamlit lee `data/predictions/<runner>/{predictions,statistics}.parquet`.
-Las predicciones no se versionan, así que primero hay que generarlas:
+El tablero de Streamlit lee `data/predictions/<runner>/{predictions,statistics}.parquet`
+y, si esa carpeta está vacía, los resultados guardados en `reports/predictions/` (los seis
+modelos con sus 24 cortes). Para regenerarlos:
 
 ```bash
 uv run python scripts/run_model.py arimax --against naive
@@ -758,6 +759,7 @@ uv run streamlit run app/dashboard.py   # o: make dashboard
 | Pestaña | Qué muestra |
 |---|---|
 | Datos | Nivel diario por estación y rango de fechas, con los días no `observed` coloreados por etiqueta de calidad y un conteo de etiquetas por estación. Si existe `data/processed/orinoco_exogenous.parquet`, también lluvia diaria y ONI. |
+| Comparativa de modelos | Ranking de los 24 cortes con el criterio del README (semillas promediadas): modelo ganador, MAE medio por estación con Naive como referencia, curva de MAE por día de horizonte y test de signos por estación. |
 | Validación de modelos | Métricas (h = 1..14) por estación y modelo, con `rel_mae < 1` marcado; media ± desviación entre semillas de las redes; tabla del criterio de selección y MAE por día de horizonte frente a Naive. |
 | Pronóstico por ventana | Para una estación y un corte de validación: 60 días observados antes del corte, los 14 posteriores y el pronóstico de cada modelo. La media de semillas se muestra solo como referencia visual. |
 
