@@ -5,6 +5,7 @@
 | [`01_xgboost_booster.ipynb`](01_xgboost_booster.ipynb) | Proceso del XGBoost (`booster`): datos, partición, diseño, Optuna, validación de 24 cortes y limitaciones |
 | [`02_tcn.ipynb`](02_tcn.ipynb) | Proceso de la red convolucional TCN, validación de 24 cortes (GPU) y el experimento de covariables |
 | [`03_cnn_lstm.ipynb`](03_cnn_lstm.ipynb) | Proceso del híbrido CNN-LSTM, validación de 24 cortes (CPU y GPU) y comparación con los otros modelos |
+| [`04_transformer.ipynb`](04_transformer.ipynb) | Proceso del Transformer propio (encoder de PyTorch sobre el pipeline del CNN-LSTM), Optuna y validación de 24 cortes (CPU) |
 | [`colab_folds.ipynb`](colab_folds.ipynb) | Ejecuta `run_model.py <modelo> --folds` en Google Colab con GPU |
 
 ## Cómo usarlos
