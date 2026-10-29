@@ -103,7 +103,11 @@ def score(
 
 
 def evaluate(
-    params: dict[str, Any], frame: pl.DataFrame, cutoffs: list[date], horizon: int
+    params: dict[str, Any],
+    frame: pl.DataFrame,
+    cutoffs: list[date],
+    horizon: int,
+    runner_cls: type[CnnLstmRunner] = CnnLstmRunner,
 ) -> tuple[float, dict[str, float], float]:
     """Fit once at ``cutoffs[0]``, predict every cutoff, score against Naive."""
     # Both runners ignore the supervised windows; validate_windows needs the shape.
@@ -113,7 +117,7 @@ def evaluate(
     )
     results = {}
     for name, runner in (
-        ("model", CnnLstmRunner(params)),
+        ("model", runner_cls(params)),
         ("naive", get_runner("naive")),
     ):
         runner.fit(windows, frame, cutoff=cutoffs[0], horizon=horizon)
@@ -124,8 +128,20 @@ def evaluate(
     return score(results["model"], results["naive"], observed)
 
 
-def run_study(n_trials: int, storage: str) -> optuna.Study:
-    """Create or resume the study until it has ``n_trials`` COMPLETE trials."""
+def run_study(
+    n_trials: int,
+    storage: str,
+    *,
+    suggest_fn=suggest,
+    base: dict[str, Any] | None = None,
+    runner_cls: type[CnnLstmRunner] = CnnLstmRunner,
+    study_name: str = "cnn_lstm_2009",
+) -> optuna.Study:
+    """Create or resume the study until it has ``n_trials`` COMPLETE trials.
+
+    The keyword arguments let other runners built on ``CnnLstmRunner`` (the
+    Transformer) reuse the same cutoffs, budget and objective.
+    """
     cfg = load_backtest_config()
     horizon = int(cfg["horizon"])
     frame = load_history()
@@ -142,12 +158,12 @@ def run_study(n_trials: int, storage: str) -> optuna.Study:
     print(
         f"Cortes de ajuste: {cutoffs[0]} .. {cutoffs[-1]} ({len(cutoffs)})", flush=True
     )
-    base = load_cnn_lstm_config()
+    base = load_cnn_lstm_config() if base is None else base
 
     def objective(trial: optuna.Trial) -> float:
         try:
             value, stations, mae = evaluate(
-                suggest(trial, base), frame, cutoffs, horizon
+                suggest_fn(trial, base), frame, cutoffs, horizon, runner_cls
             )
         except ValueError as error:  # e.g. not enough windows for this input_size
             raise optuna.TrialPruned(str(error)) from error
@@ -157,7 +173,7 @@ def run_study(n_trials: int, storage: str) -> optuna.Study:
 
     study = optuna.create_study(
         storage=storage,
-        study_name="cnn_lstm_2009",
+        study_name=study_name,
         direction="minimize",
         load_if_exists=True,
     )
