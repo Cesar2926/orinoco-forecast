@@ -1,8 +1,8 @@
-"""Read-only data shaping for the dashboard (no training, no final test).
+"""Read-only data shaping and in-memory live runner helpers for the dashboard.
 
-Reads ``data/predictions/<runner>/{predictions,statistics}.parquet`` written by
-``scripts/run_model.py`` and returns tidy Polars frames for the charts. The
-legacy ``stage_<A|B>/{cv,metrics}.parquet`` layout is no longer supported.
+Reads ``data/predictions/<runner>/{predictions,statistics}.parquet`` (and
+``backtest/naive/{fold_predictions,fold_statistics,comparison}.parquet`` when
+present) written by ``scripts/run_model.py`` and returns tidy Polars frames.
 """
 
 import os
@@ -12,22 +12,45 @@ from pathlib import Path
 
 import polars as pl
 
+from orinoco_forecast.data.datasets import DEFAULT_OUTPUT
 from orinoco_forecast.data.loading import repo_root
 from orinoco_forecast.data.quality import QUALITY_LABELS
+from orinoco_forecast.data.windows import build_windows
+from orinoco_forecast.evaluation.execution import (
+    FEATURE_COLUMNS,
+    INPUT_LENGTH,
+    TARGET_STATIONS,
+    UPSTREAM_STATIONS,
+    load_history,
+)
+from orinoco_forecast.models.registry import available_runners, get_runner
 
 PREDICTIONS_ENV = "ORINOCO_PREDICTIONS_DIR"
 BASELINES = "naive"
+FAST_RUNNERS = ("booster", "arimax", "naive", "seasonal_naive")
 HISTORY_DAYS = 60
 TABLE_METRICS = ("mae", "rel_mae", "rmse", "mase", "nse", "kge")
 PREDICTIONS_FILE = "predictions.parquet"
 STATISTICS_FILE = "statistics.parquet"
+FOLD_PREDICTIONS_FILE = Path("backtest") / BASELINES / "fold_predictions.parquet"
+FOLD_STATISTICS_FILE = Path("backtest") / BASELINES / "fold_statistics.parquet"
+FOLD_COMPARISON_FILE = Path("backtest") / BASELINES / "comparison.parquet"
+ENSEMBLE_LABEL = "Ensamble (seleccionados)"
 _SEED = r"^(.+)_s\d+$"
 
 
 def predictions_root() -> Path:
-    """Carpeta de predicciones; ``ORINOCO_PREDICTIONS_DIR`` la sobrescribe."""
+    """Carpeta de predicciones; usa ``reports/predictions`` como respaldo."""
     override = os.environ.get(PREDICTIONS_ENV)
-    return Path(override) if override else repo_root() / "data" / "predictions"
+    if override:
+        return Path(override)
+    default = repo_root() / "data" / "predictions"
+    if discover_models(default):
+        return default
+    fallback = repo_root() / "reports" / "predictions"
+    if discover_models(fallback):
+        return fallback
+    return default
 
 
 def run_command(model: str = "<modelo>", against: str = BASELINES) -> str:
@@ -36,11 +59,17 @@ def run_command(model: str = "<modelo>", against: str = BASELINES) -> str:
 
 
 def discover_models(root: Path) -> list[str]:
-    """Runners con ``predictions.parquet``; el baseline primero."""
+    """Runners con ``predictions.parquet`` o pliegues de backtest; baseline primero."""
     if not root.is_dir():
         return []
     found = [
-        path.name for path in root.iterdir() if (path / PREDICTIONS_FILE).is_file()
+        path.name
+        for path in root.iterdir()
+        if path.is_dir()
+        and (
+            (path / PREDICTIONS_FILE).is_file()
+            or (path / FOLD_PREDICTIONS_FILE).is_file()
+        )
     ]
     return sorted(found, key=lambda name: (name != BASELINES, name))
 
@@ -100,6 +129,59 @@ def load_metrics(root: Path, models: list[str]) -> pl.DataFrame:
             *TABLE_METRICS,
             "against",
         )
+    )
+
+
+def load_fold_comparison(root: Path, models: list[str]) -> pl.DataFrame:
+    """Resumen walk-forward (24 cortes) de ``backtest/naive/comparison.parquet``."""
+    frames = []
+    for model in models:
+        path = root / model / FOLD_COMPARISON_FILE
+        if not path.is_file():
+            continue
+        frames.append(pl.read_parquet(path).with_columns(source=pl.lit(model)))
+    if not frames:
+        return pl.DataFrame()
+    combined = pl.concat(frames, how="diagonal_relaxed")
+    keys = [
+        c
+        for c in ("unique_id", "model", "against", "horizon", "metric")
+        if c in combined.columns
+    ]
+    out = combined.unique(subset=keys, keep="first", maintain_order=True).with_columns(
+        family=_family()
+    )
+    if {"mean_model", "mean_baseline"} <= set(out.columns):
+        out = out.with_columns(rel_mae=pl.col("mean_model") / pl.col("mean_baseline"))
+    return out.sort("unique_id", "model")
+
+
+def load_fold_timeline(root: Path, models: list[str], unique_id: str) -> pl.DataFrame:
+    """MAE por corte walk-forward (``horizon == 'all'``) para una estación."""
+    frames = []
+    for model in models:
+        path = root / model / FOLD_STATISTICS_FILE
+        if not path.is_file():
+            continue
+        frames.append(pl.read_parquet(path).with_columns(source=pl.lit(model)))
+    if not frames:
+        return pl.DataFrame()
+    combined = pl.concat(frames, how="diagonal_relaxed").filter(
+        (pl.col("unique_id") == unique_id) & (pl.col("horizon") == "all")
+    )
+    if combined.is_empty():
+        return pl.DataFrame()
+    own = (pl.col("model").str.to_lowercase() == pl.col("source")) | pl.col(
+        "model"
+    ).str.to_lowercase().str.starts_with(pl.col("source") + "_")
+    return (
+        combined.with_columns(_own=own)
+        .sort("_own", descending=True)
+        .unique(subset=["unique_id", "cutoff", "model"], keep="first")
+        .drop("_own")
+        .with_columns(family=_family())
+        .select("unique_id", "cutoff", "model", "family", "mae", "rmse", "rel_mae")
+        .sort("model", "cutoff")
     )
 
 
@@ -170,33 +252,284 @@ def _seed_means(forecasts: pl.DataFrame, levels: pl.DataFrame) -> pl.DataFrame:
     return pl.concat([forecasts, means])
 
 
+def add_ensemble(
+    forecasts: pl.DataFrame,
+    models: list[str],
+    levels: pl.DataFrame,
+    label: str = ENSEMBLE_LABEL,
+) -> pl.DataFrame:
+    """Agrega en memoria el promedio de los modelos seleccionados (sin ``naive``)."""
+    chosen = [m for m in models if m != BASELINES]
+    subset = forecasts.filter(pl.col("model").is_in(chosen))
+    if subset.is_empty():
+        return forecasts
+    ens = (
+        subset.group_by("unique_id", "cutoff", "ds")
+        .agg(y_hat=pl.col("y_hat").mean())
+        .join(
+            levels.select("unique_id", "ds", "y"),
+            on=["unique_id", "ds"],
+            how="left",
+        )
+        .with_columns(model=pl.lit(label))
+        .select(forecasts.columns)
+    )
+    return pl.concat([forecasts, ens])
+
+
+def _ensure_naive(raw: pl.DataFrame, levels: pl.DataFrame) -> pl.DataFrame:
+    """Sintetiza ``naive`` en los cortes donde no exista todavía."""
+    has_naive = (
+        raw.filter(pl.col("model") == BASELINES)
+        .select("unique_id", "cutoff", "ds")
+        .unique()
+    )
+    missing_grid = (
+        raw.select("unique_id", "cutoff", "ds")
+        .unique()
+        .join(has_naive, on=["unique_id", "cutoff", "ds"], how="anti")
+    )
+    if missing_grid.is_empty():
+        return raw
+    observed = (
+        levels.filter(pl.col("y").is_not_null())
+        .select("unique_id", "ds", pl.col("y").alias("y_hat"))
+        .sort("unique_id", "ds")
+    )
+    cutoffs = (
+        missing_grid.select("unique_id", "cutoff")
+        .unique()
+        .sort("unique_id", "cutoff")
+        .join_asof(
+            observed,
+            left_on="cutoff",
+            right_on="ds",
+            by="unique_id",
+            strategy="backward",
+            check_sortedness=False,
+        )
+        .select("unique_id", "cutoff", "y_hat")
+    )
+    synth = (
+        missing_grid.join(cutoffs, on=["unique_id", "cutoff"], how="left")
+        .with_columns(model=pl.lit(BASELINES))
+        .select("unique_id", "ds", "cutoff", "model", "y_hat")
+    )
+    return pl.concat([raw, synth])
+
+
 def load_forecasts(root: Path, models: list[str], levels: pl.DataFrame) -> pl.DataFrame:
     """Predicciones en formato largo con el nivel observado (``y``).
 
-    Las semillas se conservan y además se agrega su predicción media
-    (``"<familia> (media de semillas)"``) solo para visualizar.
+    Lee ``predictions.parquet`` y ``backtest/naive/fold_predictions.parquet``,
+    deduplica, completa ``naive`` en todos los cortes y agrega la media entre
+    semillas (``"<familia> (media de semillas)"``) solo para visualizar.
     """
     frames = []
     for model in models:
-        path = root / model / PREDICTIONS_FILE
-        if not path.is_file():
-            continue
-        predictions = pl.read_parquet(path)
-        frames.append(
-            predictions.select(
-                "unique_id",
-                "ds",
-                "cutoff",
-                pl.col("model"),
-                pl.col("y_pred").alias("y_hat"),
+        for rel in (PREDICTIONS_FILE, FOLD_PREDICTIONS_FILE):
+            path = root / model / rel
+            if not path.is_file():
+                continue
+            predictions = pl.read_parquet(path)
+            frames.append(
+                predictions.select(
+                    "unique_id",
+                    "ds",
+                    "cutoff",
+                    pl.col("model"),
+                    pl.col("y_pred").alias("y_hat"),
+                )
             )
-        )
     if not frames:
         return pl.DataFrame()
-    forecasts = pl.concat(frames).join(
+    raw = pl.concat(frames).unique(
+        subset=["unique_id", "ds", "cutoff", "model"],
+        keep="first",
+        maintain_order=True,
+    )
+    raw = _ensure_naive(raw, levels)
+    forecasts = raw.join(
         levels.select("unique_id", "ds", "y"),
         on=["unique_id", "ds"],
         how="left",
+    )
+    return _seed_means(forecasts, levels)
+
+
+def live_runners() -> list[str]:
+    """Runners implementados para predicción en vivo (los rápidos primero)."""
+    implemented = [
+        name
+        for name in available_runners()
+        if getattr(get_runner(name), "implemented", True)
+    ]
+    order = {name: i for i, name in enumerate(FAST_RUNNERS)}
+    return sorted(implemented, key=lambda name: (order.get(name, len(order)), name))
+
+
+def apply_what_if(
+    frame: pl.DataFrame,
+    unique_id: str,
+    cutoff: date,
+    level_delta_m: float = 0.0,
+    upstream_delta_m: float = 0.0,
+    rain_delta_mm: float = 0.0,
+    days: int = 7,
+) -> pl.DataFrame:
+    """Perturba en memoria los últimos ``days`` días hasta ``cutoff``."""
+    start = cutoff - timedelta(days=days)
+    in_window = (pl.col("ds") > start) & (pl.col("ds") <= cutoff)
+    ramp = (pl.col("ds") - start).dt.total_days().cast(pl.Float64) / max(1, days)
+    exprs: list[pl.Expr] = []
+    if level_delta_m != 0.0:
+        exprs.append(
+            pl.when(in_window & (pl.col("unique_id") == unique_id))
+            .then(pl.col("y") + ramp * level_delta_m)
+            .otherwise(pl.col("y"))
+            .alias("y")
+        )
+    if upstream_delta_m != 0.0:
+        up_cols = [
+            c
+            for c in frame.columns
+            if c in UPSTREAM_STATIONS
+            or c.startswith("level_")
+            or any(c.startswith(f"{u}_lag_") for u in UPSTREAM_STATIONS)
+        ]
+        for col in up_cols:
+            exprs.append(
+                pl.when(in_window)
+                .then(pl.col(col) + upstream_delta_m)
+                .otherwise(pl.col(col))
+                .alias(col)
+            )
+    if rain_delta_mm != 0.0:
+        rain_cols = [c for c in frame.columns if c.startswith("rain_")]
+        for col in rain_cols:
+            exprs.append(
+                pl.when(in_window)
+                .then((pl.col(col) + rain_delta_mm).clip(lower_bound=0.0))
+                .otherwise(pl.col(col))
+                .alias(col)
+            )
+    return frame.clone().with_columns(*exprs) if exprs else frame.clone()
+
+
+def _extract_predictions(pred: object, target_ids: list[str]) -> pl.DataFrame:
+    if hasattr(pred, "frame"):
+        raw = pred.frame.select(
+            "unique_id",
+            "ds",
+            "cutoff",
+            pl.col("model"),
+            pl.col("y_pred").alias("y_hat"),
+        )
+    else:
+        wide = pred.predictions
+        cols = [c for c in wide.columns if c not in ("unique_id", "ds", "cutoff")]
+        raw = wide.unpivot(
+            on=cols,
+            index=["unique_id", "ds", "cutoff"],
+            variable_name="model",
+            value_name="y_hat",
+        )
+    return raw.filter(pl.col("unique_id").is_in(target_ids))
+
+
+def _run_one_live(
+    frame: pl.DataFrame,
+    model_name: str,
+    cutoff: date,
+    horizon: int,
+    *,
+    fast_mode: bool = True,
+    what_if_frame: pl.DataFrame | None = None,
+) -> pl.DataFrame:
+    runner = get_runner(model_name)
+    if (
+        fast_mode
+        and hasattr(runner, "params")
+        and isinstance(runner.params, dict)
+        and runner.params.get("seeds")
+    ):
+        runner.params = {**runner.params, "seeds": [runner.params["seeds"][0]]}
+    history = frame.filter(pl.col("ds") <= cutoff).sort("unique_id", "ds")
+    if (
+        model_name == "arimax"
+        and not any("_lag_" in c for c in history.columns)
+        and DEFAULT_OUTPUT.is_file()
+    ):
+        history = load_history().filter(pl.col("ds") <= cutoff).sort("unique_id", "ds")
+    present_ids = set(history["unique_id"].unique().to_list())
+    target_ids = [u for u in TARGET_STATIONS if u in present_ids] or sorted(present_ids)
+    targets = history.filter(pl.col("unique_id").is_in(target_ids))
+    feature_cols = [c for c in FEATURE_COLUMNS if c in targets.columns] or ["y"]
+    max_len = max(1, targets.height // max(1, len(target_ids)) - horizon - 1)
+    windows = build_windows(
+        targets,
+        cutoff=cutoff,
+        input_length=min(INPUT_LENGTH, max_len),
+        horizon=horizon,
+        feature_columns=feature_cols,
+    )
+    runner.fit(windows, history, cutoff=cutoff, horizon=horizon)
+    base_out = _extract_predictions(
+        runner.predict(history, cutoff=cutoff, horizon=horizon), target_ids
+    )
+    if what_if_frame is None:
+        return base_out
+    wi_history = what_if_frame.filter(pl.col("ds") <= cutoff).sort("unique_id", "ds")
+    wi_out = _extract_predictions(
+        runner.predict(wi_history, cutoff=cutoff, horizon=horizon), target_ids
+    ).with_columns(model=pl.col("model") + " (simulado)")
+    return pl.concat([base_out, wi_out])
+
+
+def run_live_forecast(
+    frame: pl.DataFrame,
+    levels: pl.DataFrame,
+    model_name: str,
+    cutoff: date,
+    horizon: int = 14,
+    *,
+    fast_mode: bool = True,
+    what_if_frame: pl.DataFrame | None = None,
+) -> pl.DataFrame:
+    """Ejecuta ``model_name`` (y ``naive`` como referencia) en ``cutoff``."""
+    parts = [
+        _run_one_live(
+            frame,
+            model_name,
+            cutoff,
+            horizon,
+            fast_mode=fast_mode,
+            what_if_frame=what_if_frame,
+        )
+    ]
+    if model_name != BASELINES:
+        parts.append(
+            _run_one_live(
+                frame,
+                BASELINES,
+                cutoff,
+                horizon,
+                fast_mode=fast_mode,
+                what_if_frame=None,
+            )
+        )
+    forecasts = (
+        pl.concat(parts)
+        .unique(
+            subset=["unique_id", "ds", "cutoff", "model"],
+            keep="first",
+            maintain_order=True,
+        )
+        .join(
+            levels.select("unique_id", "ds", "y"),
+            on=["unique_id", "ds"],
+            how="left",
+        )
     )
     return _seed_means(forecasts, levels)
 

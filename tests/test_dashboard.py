@@ -6,20 +6,24 @@ from pathlib import Path
 import polars as pl
 import pytest
 
-from orinoco_forecast.dashboard import data
+from orinoco_forecast.dashboard import charts, data
 from orinoco_forecast.data.loading import repo_root
 
 H = 14
 CUTOFF = date(2021, 2, 9)
+EARLIER_CUTOFF = date(2021, 1, 26)
 STATIONS = ["ciudad_bolivar", "palua"]
 RAW = repo_root() / "data" / "raw" / "Niveles Orinoco.xlsx"
 APP = Path(__file__).resolve().parents[1] / "app" / "dashboard.py"
 METRICS = ("mae", "rmse", "mase", "nse", "kge")
 
 
-def _levels() -> pl.DataFrame:
+def _levels(days_before: int = 60) -> pl.DataFrame:
     dates = pl.date_range(
-        CUTOFF - timedelta(days=60), CUTOFF + timedelta(days=H), "1d", eager=True
+        CUTOFF - timedelta(days=days_before),
+        CUTOFF + timedelta(days=H),
+        "1d",
+        eager=True,
     )
     return pl.concat(
         pl.DataFrame({"unique_id": station, "ds": dates}).with_columns(
@@ -29,22 +33,27 @@ def _levels() -> pl.DataFrame:
     )
 
 
-def _predictions(models: dict[str, float]) -> pl.DataFrame:
-    future = _levels().filter(
-        pl.col("ds").is_between(CUTOFF + timedelta(days=1), CUTOFF + timedelta(days=H))
-    )
-    rows = [
-        {
-            "model": model,
-            "unique_id": row["unique_id"],
-            "cutoff": CUTOFF,
-            "ds": row["ds"],
-            "horizon_step": (row["ds"] - CUTOFF).days,
-            "y_pred": row["y"] + bias,
-        }
-        for model, bias in models.items()
-        for row in future.iter_rows(named=True)
-    ]
+def _predictions(
+    models: dict[str, float], cutoffs: tuple[date, ...] = (CUTOFF,)
+) -> pl.DataFrame:
+    levels = _levels()
+    rows = []
+    for cut in cutoffs:
+        future = levels.filter(
+            pl.col("ds").is_between(cut + timedelta(days=1), cut + timedelta(days=H))
+        )
+        for model, bias in models.items():
+            for row in future.iter_rows(named=True):
+                rows.append(
+                    {
+                        "model": model,
+                        "unique_id": row["unique_id"],
+                        "cutoff": cut,
+                        "ds": row["ds"],
+                        "horizon_step": (row["ds"] - cut).days,
+                        "y_pred": row["y"] + bias,
+                    }
+                )
     return pl.DataFrame(rows)
 
 
@@ -176,6 +185,148 @@ def test_load_forecasts_adds_seed_means_and_observed_levels(root: Path) -> None:
     assert {"TCN_s1", "TCN_s2", "TCN_s3", "naive"} <= set(preds["model"])
 
 
+def test_load_forecasts_reads_fold_predictions_and_synthesizes_naive(
+    root: Path,
+) -> None:
+    levels = _levels()
+    fold_dir = root / "arimax" / "backtest" / "naive"
+    fold_dir.mkdir(parents=True)
+    fold_preds = _predictions({"arimax": 0.5}, cutoffs=(EARLIER_CUTOFF, CUTOFF))
+    fold_preds.write_parquet(fold_dir / "fold_predictions.parquet")
+
+    preds = data.load_forecasts(root, data.discover_models(root), levels)
+    cutoffs = sorted(preds["cutoff"].unique().to_list())
+    assert cutoffs == [EARLIER_CUTOFF, CUTOFF]
+
+    naive_earlier = preds.filter(
+        (pl.col("model") == "naive")
+        & (pl.col("cutoff") == EARLIER_CUTOFF)
+        & (pl.col("unique_id") == "palua")
+    )
+    assert naive_earlier.height == H
+    expected_y = levels.filter(
+        (pl.col("unique_id") == "palua") & (pl.col("ds") == EARLIER_CUTOFF)
+    )["y"].item()
+    assert naive_earlier["y_hat"].to_list() == [pytest.approx(expected_y)] * H
+
+
+def test_load_fold_comparison_and_timeline(root: Path) -> None:
+    comp_dir = root / "arimax" / "backtest" / "naive"
+    comp_dir.mkdir(parents=True)
+    comp = pl.DataFrame(
+        [
+            {
+                "unique_id": station,
+                "model": "arimax",
+                "against": "naive",
+                "horizon": "all",
+                "metric": "mae",
+                "n_folds": 24,
+                "n_improvement": 24,
+                "mean_model": 0.30,
+                "std_model": 0.10,
+                "mean_baseline": 0.50,
+                "std_baseline": 0.15,
+                "mean_diff": -0.20,
+                "std_diff": 0.12,
+                "mean_improvement_pct": 40.0,
+                "std_improvement_pct": 20.0,
+                "min_improvement_pct": -10.0,
+                "max_improvement_pct": 80.0,
+                "wins": 20,
+                "ties": 0,
+                "losses": 4,
+                "win_rate": 20 / 24,
+                "sign_test_p": 0.0015,
+            }
+            for station in STATIONS
+        ]
+    )
+    comp.write_parquet(comp_dir / "comparison.parquet")
+
+    fold_stats = pl.concat(
+        [
+            _statistics({"arimax": 0.5, "naive": 1.0}).with_columns(
+                fold=pl.lit(idx, dtype=pl.Int32),
+                cutoff=pl.lit(cut, dtype=pl.Date),
+            )
+            for idx, cut in enumerate((EARLIER_CUTOFF, CUTOFF), start=1)
+        ]
+    )
+    fold_stats.write_parquet(comp_dir / "fold_statistics.parquet")
+
+    loaded = data.load_fold_comparison(root, data.discover_models(root))
+    assert loaded.height == len(STATIONS)
+    assert {"family", "rel_mae", "source"} <= set(loaded.columns)
+    assert loaded["rel_mae"][0] == pytest.approx(0.30 / 0.50)
+
+    timeline = data.load_fold_timeline(root, data.discover_models(root), "palua")
+    assert set(timeline["model"]) == {"arimax", "naive"}
+    assert set(timeline["cutoff"]) == {EARLIER_CUTOFF, CUTOFF}
+    chart = charts.fold_timeline_chart(timeline)
+    assert chart is not None
+
+
+def test_add_ensemble_averages_selected_non_naive_models(root: Path) -> None:
+    levels = _levels()
+    preds = data.load_forecasts(root, data.discover_models(root), levels)
+    with_ens = data.add_ensemble(preds, ["arimax", "TCN_s1", "naive"], levels)
+    ens = with_ens.filter(
+        (pl.col("model") == data.ENSEMBLE_LABEL) & (pl.col("unique_id") == "palua")
+    ).sort("ds")
+    assert ens.height == H
+    first = ens.row(0, named=True)
+    # arimax has bias 0.5 and TCN_s1 has bias 0.2 -> ensemble bias is 0.35
+    assert first["y_hat"] == pytest.approx(first["y"] + 0.35)
+
+
+def test_live_runners_and_what_if_forecast() -> None:
+    runners = data.live_runners()
+    assert "naive" in runners
+    assert "seasonal_naive" in runners
+    assert runners[0] == "booster"
+
+    levels = _levels(days_before=400).with_columns(
+        ayacucho=pl.col("y") + 1.0,
+        rain_palua=pl.lit(10.0),
+    )
+    wi = data.apply_what_if(
+        levels,
+        "palua",
+        CUTOFF,
+        level_delta_m=1.4,
+        upstream_delta_m=0.5,
+        rain_delta_mm=-20.0,
+        days=7,
+    )
+    # Original frame is untouched in memory
+    orig_cut = levels.filter(
+        (pl.col("unique_id") == "palua") & (pl.col("ds") == CUTOFF)
+    )["y"].item()
+    wi_cut = wi.filter((pl.col("unique_id") == "palua") & (pl.col("ds") == CUTOFF))[
+        "y"
+    ].item()
+    assert wi_cut == pytest.approx(orig_cut + 1.4)
+    assert wi["rain_palua"].min() >= 0.0
+
+    preds = data.run_live_forecast(
+        levels,
+        levels,
+        "seasonal_naive",
+        CUTOFF,
+        horizon=H,
+        fast_mode=True,
+        what_if_frame=wi,
+    )
+    assert set(preds.columns) == {"unique_id", "ds", "cutoff", "y", "model", "y_hat"}
+    assert set(preds["model"]) == {
+        "seasonal_naive",
+        "seasonal_naive (simulado)",
+        "naive",
+    }
+    assert preds.height == 3 * len(STATIONS) * H
+
+
 def test_forecast_window_aligns_history_and_horizon(root: Path) -> None:
     levels = _levels()
     preds = data.load_forecasts(root, data.discover_models(root), levels)
@@ -213,7 +364,7 @@ def test_app_runs_with_runner_outputs(
 ) -> None:
     at = _app(monkeypatch, root)
     assert not at.exception
-    assert len(at.tabs) == 3
+    assert len(at.tabs) == 4
     models = at.multiselect(key="h_models").options
     assert "arimax" in models and "TCN_s1" in models
 
