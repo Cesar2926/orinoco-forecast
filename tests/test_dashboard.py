@@ -7,13 +7,13 @@ import polars as pl
 import pytest
 
 from orinoco_forecast.dashboard import charts, data
-from orinoco_forecast.data.loading import repo_root
+from orinoco_forecast.data.loading import get_source, repo_root
 
 H = 14
 CUTOFF = date(2021, 2, 9)
 EARLIER_CUTOFF = date(2021, 1, 26)
 STATIONS = ["ciudad_bolivar", "palua"]
-RAW = repo_root() / "data" / "raw" / "Niveles Orinoco.xlsx"
+RAW = repo_root() / get_source("orinoco_stations")["path"]
 APP = Path(__file__).resolve().parents[1] / "app" / "dashboard.py"
 METRICS = ("mae", "rmse", "mase", "nse", "kge")
 
@@ -363,7 +363,7 @@ def _app(monkeypatch: pytest.MonkeyPatch, root: Path):
     return AppTest.from_file(str(APP), default_timeout=120).run()
 
 
-@pytest.mark.skipif(not RAW.is_file(), reason="data/raw/Niveles Orinoco.xlsx missing")
+@pytest.mark.skipif(not RAW.is_file(), reason=f"{RAW.name} missing")
 def test_app_runs_with_runner_outputs(
     monkeypatch: pytest.MonkeyPatch, root: Path
 ) -> None:
@@ -374,7 +374,7 @@ def test_app_runs_with_runner_outputs(
     assert "arimax" in models and "TCN_s1" in models
 
 
-@pytest.mark.skipif(not RAW.is_file(), reason="data/raw/Niveles Orinoco.xlsx missing")
+@pytest.mark.skipif(not RAW.is_file(), reason=f"{RAW.name} missing")
 def test_app_runs_without_predictions(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

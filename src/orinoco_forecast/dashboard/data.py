@@ -228,6 +228,8 @@ def fold_station_mae(
 
     Naive se añade como fila propia a partir de ``mean_baseline``.
     """
+    if fold_comparison.is_empty():
+        return pl.DataFrame()
     mae = fold_comparison.filter(
         (pl.col("metric") == "mae") & (pl.col("horizon") == horizon)
     )
