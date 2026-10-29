@@ -9,12 +9,12 @@ checkpoint: google/timesfm-3.0-pytorch
 device: auto
 
 # Days of history fed as context (the model accepts up to 15 360). Grid for the
-# zero-shot search: 512 / 1024 / 2048. Starting value, not tuned yet.
-context_len: 1024
+# zero-shot search: 512 / 1024 / 2048 (scripts/tune_timesfm3.py).
+context_len: 1024 # ajustado: rejilla de 6 configuraciones (scripts/tune_timesfm3.py), ventanas de ajuste 2020, datos 2009-2024, objetivo rel_mae medio
 
 # Pass the covariate columns left by drop_covariates as past-only covariates
 # (values up to the cutoff only). Off: univariate, the pure zero-shot baseline.
-use_covariates: false
+use_covariates: false # ajustado: rejilla de 6 configuraciones (scripts/tune_timesfm3.py), ventanas de ajuste 2020, datos 2009-2024, objetivo rel_mae medio
 # Same covariate policy as the TCN and the CNN-LSTM: river levels only.
 drop_covariates: [rain_, oni]
 
