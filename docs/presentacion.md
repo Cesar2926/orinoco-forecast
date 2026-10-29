@@ -11,7 +11,7 @@ día de la presentación**:
 ```bash
 git clone https://github.com/Cesar2926/orinoco-forecast.git
 cd orinoco-forecast
-uv sync
+uv sync --extra timesfm   # TimesFM 3 corre en vivo; descarga ~1,3 GB de pesos la primera vez
 uv run python scripts/export_presentation.py   # respaldo sin red en reports/presentation/
 ```
 
