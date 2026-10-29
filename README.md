@@ -307,6 +307,11 @@ booster, ARIMAX, Transformer y TimesFM 3 corrieron en CPU, TCN en una GPU de Col
   Ciudad Bolívar a 7 días tiene el menor MAE de la tabla (0,272), pero la diferencia con el
   TCN (0,274) es despreciable. Palúa a 7 días sigue sin evidencia contra Naive (p = 0,54 a
   1,00 según semilla).
+- **Ensamble** (media simple de los seis modelos, composición fijada antes del test;
+  `scripts/make_ensemble.py`): MAE medio **0,298 m** (Ciudad Bolívar 0,280, Palúa 0,317), el
+  menor de todos, aunque solo 0,002 m por debajo de TimesFM 3. Promediar reduce el error de
+  los modelos individuales sin elegir uno; no se reentrena nada, solo se promedian las
+  predicciones guardadas de los 24 cortes.
 - **TimesFM 3**, sin entrenar con un solo dato del Orinoco, tiene el menor MAE medio y es el
   mejor en **Palúa** a 7 y a 14 días (0,345 y 0,486). En Ciudad Bolívar queda a la par del
   booster y del TCN. Su ventaja sobre el booster (0,009 m) es menor que la dispersión entre

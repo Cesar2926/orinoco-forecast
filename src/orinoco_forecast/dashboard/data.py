@@ -237,13 +237,18 @@ def fold_station_mae(
         return pl.DataFrame()
     models = mae.group_by("source", "unique_id").agg(
         mae=pl.col("mean_model").mean(),
+        std_folds=pl.col("std_model").mean(),
         mae_std_seeds=pl.col("mean_model").std(),
         naive=pl.col("mean_baseline").first(),
+        naive_std=pl.col("std_baseline").first(),
         win_rate=pl.col("win_rate").mean(),
         p_min=pl.col("sign_test_p").min(),
         p_max=pl.col("sign_test_p").max(),
     )
-    naive = models.group_by("unique_id").agg(pl.col("naive").first().alias("mae"))
+    naive = models.group_by("unique_id").agg(
+        pl.col("naive").first().alias("mae"),
+        pl.col("naive_std").first().alias("std_folds"),
+    )
     naive = naive.with_columns(source=pl.lit(BASELINES), naive=pl.col("mae"))
     return (
         pl.concat([models, naive], how="diagonal_relaxed")
@@ -267,6 +272,7 @@ def fold_ranking(fold_comparison: pl.DataFrame) -> pl.DataFrame:
         .agg(
             beats_naive=(pl.col("rel_mae") < 1).all() & (pl.len() == len(stations)),
             mean_mae=pl.col("mae").mean(),
+            std_folds=pl.col("std_folds").mean(),
         )
         .join(wide, on="model")
         .with_columns(
@@ -280,7 +286,12 @@ def fold_ranking(fold_comparison: pl.DataFrame) -> pl.DataFrame:
         )
     )
     return ranking.with_row_index("rank", offset=1).select(
-        "rank", "model", "beats_naive", "mean_mae", *(f"mae_{s}" for s in stations)
+        "rank",
+        "model",
+        "beats_naive",
+        "mean_mae",
+        "std_folds",
+        *(f"mae_{s}" for s in stations),
     )
 
 

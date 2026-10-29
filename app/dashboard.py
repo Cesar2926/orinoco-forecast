@@ -266,8 +266,9 @@ with tab_compare:
             "mismo protocolo: 24 cortes walk-forward (2021–2022), pronóstico de 1 a "
             f"{cfg['horizon']} días y Naive (repetir el último nivel) como referencia. "
             "Los modelos con semillas (`tcn`, `cnn_lstm`, `transformer`) se "
-            "promedian. El test final (desde "
-            f"{cfg['test_start']}) no se usa."
+            "promedian. `ensemble` es la media simple de los pronósticos de los seis "
+            "modelos (fijada antes de ver el test; `scripts/make_ensemble.py`). "
+            f"El test final (desde {cfg['test_start']}) no se usa."
         )
         best = ranking.row(0, named=True)  # Sorted: Naive winners first.
         naive_mae = ranking.filter(pl.col("model") == data.BASELINES)["mean_mae"]
@@ -296,6 +297,12 @@ with tab_compare:
                 "beats_naive": st.column_config.CheckboxColumn("Gana a Naive"),
                 "mean_mae": st.column_config.NumberColumn(
                     "MAE medio (m)", format="%.3f"
+                ),
+                "std_folds": st.column_config.NumberColumn(
+                    "± desviación entre cortes (m)",
+                    format="%.3f",
+                    help="Cuánto varía el MAE de un corte a otro (temporada seca, "
+                    "crecida, pico). No es el error del promedio.",
                 ),
                 "mae_ciudad_bolivar": st.column_config.NumberColumn(
                     "Ciudad Bolívar (m)", format="%.3f"
