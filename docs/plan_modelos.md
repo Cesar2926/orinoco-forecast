@@ -157,6 +157,9 @@ paralelo, mucho más rápido que un LSTM. Usa activación ReLU.
 
 ### 2.5 Transformer: TFT (Temporal Fusion Transformer)
 
+> **Cambio posterior:** se implementó un Transformer propio en lugar del TFT, para compararlo con
+> el CNN-LSTM con el mismo pipeline. Ver [`modelos_transformer_timesfm.md`](modelos_transformer_timesfm.md).
+
 | Parámetro | Valor o rango | Justificación |
 |---|---|---|
 | `hidden_size` | 32 / 64 / 128 | El valor por defecto (128) es grande para 18 000 datos. |

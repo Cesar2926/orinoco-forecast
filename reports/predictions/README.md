@@ -10,7 +10,7 @@ no se ha tocado.
 ```text
 reports/
   baselines/naive/predictions.parquet     # baseline Naive en el corte 2022-12-17
-  predictions/<modelo>/                   # booster, arimax, tcn, cnn_lstm
+  predictions/<modelo>/                   # booster, arimax, tcn, cnn_lstm, transformer
     predictions.parquet                   # un corte (2022-12-17), 14 días
     statistics.parquet                    # métricas de ese corte contra Naive
     backtest/naive/                       # barrido de 24 cortes contra Naive
@@ -30,6 +30,7 @@ Los resultados de Naive del barrido de 24 cortes no tienen archivo aparte: van d
 | `arimax` | CPU | CPU (583 s con la CPU compartida) |
 | `tcn` | CPU | **GPU** (Colab, T4) |
 | `cnn_lstm` | CPU | `backtest/naive`: CPU; `backtest/naive_gpu`: GPU (Colab) |
+| `transformer` | CPU | CPU (unas 7 h con la CPU compartida; 3 semillas) |
 
 La GPU no es determinista, por lo que una nueva ejecución en GPU puede diferir un poco de
 estos archivos. La comparación CPU contra GPU del CNN-LSTM está en

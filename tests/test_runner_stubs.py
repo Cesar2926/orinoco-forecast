@@ -6,7 +6,6 @@ import polars as pl
 import pytest
 
 from orinoco_forecast.models.neural.lstm import NsmtRunner
-from orinoco_forecast.models.neural.transformer import TransformerRunner
 from orinoco_forecast.models.pretrained.timesfm import TimesFM3Runner
 from orinoco_forecast.models.registry import (
     available_runners,
@@ -69,7 +68,7 @@ def test_implemented_flags_are_explicit() -> None:
     assert get_runner("booster").implemented is True
     assert get_runner("tcn").implemented is True
     assert get_runner("nsmt").implemented is False
-    assert get_runner("transformer").implemented is False
+    assert get_runner("transformer").implemented is True
     assert get_runner("timesfm3").implemented is False
 
 
@@ -82,7 +81,6 @@ def test_unknown_runner_fails() -> None:
     ("runner", "config_key"),
     [
         (NsmtRunner, "hidden_size"),
-        (TransformerRunner, "d_model"),
         (TimesFM3Runner, "checkpoint"),
     ],
 )
@@ -92,7 +90,7 @@ def test_structure_only_runners_load_their_config(runner, config_key) -> None:
     assert instance.implemented is False
 
 
-@pytest.mark.parametrize("name", ["nsmt", "transformer", "timesfm3"])
+@pytest.mark.parametrize("name", ["nsmt", "timesfm3"])
 def test_structure_only_runners_raise_a_clear_error(name) -> None:
     runner = get_runner(name)
     with pytest.raises(NotImplementedError, match="estructura"):
