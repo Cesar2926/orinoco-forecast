@@ -90,6 +90,29 @@ def horizon_chart(errors: pl.DataFrame) -> alt.Chart:
     )
 
 
+def fold_timeline_chart(timeline: pl.DataFrame) -> alt.Chart:
+    """MAE por fecha de corte en los 24 pliegues walk-forward; Naive punteado."""
+    return (
+        alt.Chart(timeline)
+        .mark_line(point=True)
+        .encode(
+            x=alt.X("cutoff:T", title="Fecha de corte (2021–2022)"),
+            y=alt.Y("mae:Q", title="MAE en la ventana de 14 días (m)"),
+            color=alt.Color("model:N", title="Modelo"),
+            strokeDash=alt.condition(
+                alt.datum.model == "naive", alt.value([6, 4]), alt.value([1, 0])
+            ),
+            tooltip=[
+                "model",
+                "cutoff:T",
+                alt.Tooltip("mae:Q", format=".3f"),
+                alt.Tooltip("rel_mae:Q", format=".3f"),
+            ],
+        )
+        .properties(height=HEIGHT)
+    )
+
+
 def forecast_chart(
     history: pl.DataFrame,
     after: pl.DataFrame,
