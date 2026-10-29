@@ -253,3 +253,18 @@ def test_cli_saved_report_and_eval_modes(
     assert "Ningún modelo supera a Naive en todas las estaciones (test: 2" in eval_out
     stations = pl.read_csv(tmp_path / "test_ranking_stations.csv")
     assert {"naive", "seasonal_naive"} <= set(stations["model"])
+
+
+def test_evaluate_windows_saves_predictions(tmp_path: Path) -> None:
+    out = tmp_path / "live" / "forecasts.parquet"
+    report.evaluate_windows(
+        _synthetic_frame(),
+        ["seasonal_naive"],
+        [date(2023, 1, 1), date(2023, 1, 15)],
+        fit_once=True,
+        predictions_out=out,
+    )
+    saved = pl.read_parquet(out)
+    assert saved.columns == ["unique_id", "ds", "cutoff", "model", "y_hat", "y"]
+    assert set(saved["model"]) == {"seasonal_naive", "naive"}
+    assert saved["cutoff"].n_unique() == 2

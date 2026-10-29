@@ -210,8 +210,13 @@ def evaluate_windows(
     horizon: int = 14,
     fit_once: bool = False,
     fast_mode: bool = False,
+    predictions_out: Path | None = None,
 ) -> tuple[pl.DataFrame, pl.DataFrame]:
-    """Evalúa ``models`` (más ``naive``) en ``cutoffs`` y devuelve resumen y ranking."""
+    """Evalúa ``models`` (más ``naive``) en ``cutoffs`` y devuelve resumen y ranking.
+
+    ``predictions_out`` guarda además cada pronóstico (``unique_id, ds, cutoff,
+    model, y_hat, y``); el dashboard lo usa para comparar modelos en vivo.
+    """
     if not cutoffs:
         raise ValueError("cutoffs no puede estar vacío.")
     ordered_cutoffs = list(cutoffs)
@@ -265,6 +270,11 @@ def evaluate_windows(
             sq_err=(pl.col("y_hat") - pl.col("y")).pow(2),
         )
     )
+    if predictions_out is not None:
+        _save_output(
+            all_preds.select("unique_id", "ds", "cutoff", "model", "y_hat", "y"),
+            predictions_out,
+        )
     per_station = (
         all_preds.group_by("unique_id", "model")
         .agg(
@@ -383,6 +393,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=None,
         help="Ruta opcional (.csv o .parquet) para exportar la tabla de ranking.",
     )
+    parser.add_argument(
+        "--predictions-out",
+        type=Path,
+        default=None,
+        help="Con --eval, guarda cada pronóstico (.parquet) para el dashboard.",
+    )
     args = parser.parse_args(argv)
 
     if args.eval is None:
@@ -479,6 +495,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             horizon=args.horizon,
             fit_once=args.fit_once,
             fast_mode=args.fast,
+            predictions_out=args.predictions_out,
         )
     context = (
         f"{args.eval}: {len(cutoffs)} ventanas de {args.horizon}d "
