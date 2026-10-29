@@ -35,6 +35,7 @@ STATISTICS_FILE = "statistics.parquet"
 FOLD_PREDICTIONS_FILE = Path("backtest") / BASELINES / "fold_predictions.parquet"
 FOLD_STATISTICS_FILE = Path("backtest") / BASELINES / "fold_statistics.parquet"
 FOLD_COMPARISON_FILE = Path("backtest") / BASELINES / "comparison.parquet"
+TEST_DIR = repo_root() / "reports" / "test"
 ENSEMBLE_LABEL = "Ensamble (seleccionados)"
 _SEED = r"^(.+)_s\d+$"
 
@@ -255,7 +256,52 @@ def fold_station_mae(
 
 def fold_ranking(fold_comparison: pl.DataFrame) -> pl.DataFrame:
     """Criterio del README sobre los 24 cortes: ``rel_mae < 1`` y menor MAE medio."""
-    per_station = fold_station_mae(fold_comparison)
+    return rank_stations(fold_station_mae(fold_comparison))
+
+
+def load_test_stations(root: Path = TEST_DIR) -> pl.DataFrame:
+    """MAE del test final por modelo y estación, de ``make_report.py --eval test``.
+
+    Lee los ``ranking_*.csv`` (una corrida puede partirse por modelos) y toma el
+    MAE de Naive de los ``*_stations.csv``. Devuelve el mismo formato que
+    ``fold_station_mae`` (``model, unique_id, mae, naive, rel_mae``).
+    """
+    rankings = [
+        p for p in sorted(root.glob("ranking_*.csv")) if "_stations" not in p.stem
+    ]
+    stations = sorted(root.glob("ranking_*_stations.csv"))
+    if not rankings or not stations:
+        return pl.DataFrame()
+    naive = (
+        pl.concat([pl.read_csv(p) for p in stations], how="diagonal_relaxed")
+        .filter(pl.col("model") == BASELINES)
+        .group_by("unique_id")
+        .agg(naive=pl.col("mae").first())
+    )
+    models = (
+        pl.concat([pl.read_csv(p) for p in rankings], how="diagonal_relaxed")
+        .with_columns(
+            model=pl.col("model").str.to_lowercase().replace({"cnnlstm": "cnn_lstm"})
+        )
+        .unpivot(
+            index="model",
+            on=[f"mae_{s}" for s in TARGET_STATIONS],
+            variable_name="unique_id",
+            value_name="mae",
+        )
+        .with_columns(pl.col("unique_id").str.strip_prefix("mae_"))
+    )
+    naive_rows = naive.with_columns(model=pl.lit(BASELINES), mae=pl.col("naive"))
+    return (
+        pl.concat([models.join(naive, on="unique_id"), naive_rows], how="diagonal")
+        .with_columns(rel_mae=pl.col("mae") / pl.col("naive"))
+        .unique(subset=["model", "unique_id"], keep="first", maintain_order=True)
+        .sort("unique_id", "mae")
+    )
+
+
+def rank_stations(per_station: pl.DataFrame) -> pl.DataFrame:
+    """Ranking del README desde MAE por modelo y estación (con fila de Naive)."""
     if per_station.is_empty():
         return pl.DataFrame()
     stations = sorted(per_station["unique_id"].unique())
@@ -282,6 +328,149 @@ def fold_ranking(fold_comparison: pl.DataFrame) -> pl.DataFrame:
     return ranking.with_row_index("rank", offset=1).select(
         "rank", "model", "beats_naive", "mean_mae", *(f"mae_{s}" for s in stations)
     )
+
+
+# Costo y riesgos medidos en este proyecto (README, docs/ y reports/).
+# cost: 0 referencia, 1 CPU en minutos, 2 GPU recomendada u horas en CPU.
+MODEL_INFO = {
+    "naive": {
+        "label": "Naive (persistencia)",
+        "family": "Referencia",
+        "cost": 0,
+        "cost_text": "Instantáneo",
+        "risk": "",
+    },
+    "seasonal_naive": {
+        "label": "Naive estacional",
+        "family": "Referencia",
+        "cost": 0,
+        "cost_text": "Instantáneo",
+        "risk": "",
+    },
+    "arimax": {
+        "label": "ARIMAX",
+        "family": "Estadístico",
+        "cost": 1,
+        "cost_text": "CPU, ~10 min los 24 cortes",
+        "risk": "",
+    },
+    "booster": {
+        "label": "XGBoost",
+        "family": "Árboles de decisión",
+        "cost": 1,
+        "cost_text": "CPU, minutos los 24 cortes",
+        "risk": "",
+    },
+    "timesfm3": {
+        "label": "TimesFM 3",
+        "family": "Fundacional de Google, sin entrenar",
+        "cost": 1,
+        "cost_text": "CPU, 53 s los 24 cortes; pesos de ~1,3 GB",
+        "risk": "Pudo ver datos del Orinoco al preentrenarse; licencia no comercial",
+    },
+    "tcn": {
+        "label": "TCN",
+        "family": "Red convolucional",
+        "cost": 2,
+        "cost_text": "GPU recomendada",
+        "risk": "",
+    },
+    "cnn_lstm": {
+        "label": "CNN-LSTM",
+        "family": "Red híbrida",
+        "cost": 2,
+        "cost_text": "CPU, ~2 h 20 min los 24 cortes",
+        "risk": "",
+    },
+    "transformer": {
+        "label": "Transformer",
+        "family": "Red de atención",
+        "cost": 2,
+        "cost_text": "CPU, ~7 h los 24 cortes",
+        "risk": "",
+    },
+}
+# Diferencias de MAE menores que esto no se distinguen de la variación entre
+# cortes y semillas (README, "Resultados en validación").
+TIE_TOLERANCE_M = 0.01
+
+
+def model_label(model: str) -> str:
+    """Nombre legible del runner para tablas y gráficos."""
+    return MODEL_INFO.get(model, {}).get("label", model)
+
+
+def decision_table(per_station: pl.DataFrame) -> pl.DataFrame:
+    """Una fila por modelo: precisión, mejora sobre Naive, evidencia, costo y riesgo.
+
+    ``per_station`` es la salida de ``fold_station_mae``. La mejora es
+    ``100 * (1 - rel_mae)``: cuánto menos se equivoca el modelo que Naive.
+    """
+    if per_station.is_empty():
+        return pl.DataFrame()
+    improvement = (100 * (1 - pl.col("rel_mae"))).round(1)
+    by_station = per_station.pivot(
+        on="unique_id",
+        index="model",
+        values=["mae", "rel_mae"],
+    )
+    evidence = per_station.group_by("model").agg(
+        mean_mae=pl.col("mae").mean(),
+        improvement_pct=improvement.mean().round(1),
+        beats_naive=(pl.col("rel_mae") < 1).all(),
+        min_win_rate=pl.col("win_rate").min(),
+        significant=pl.col("unique_id")
+        .filter(pl.col("p_max") < 0.05)
+        .sort()
+        .str.join(", "),
+    )
+    info = pl.DataFrame([{"model": name, **meta} for name, meta in MODEL_INFO.items()])
+    stations = sorted(per_station["unique_id"].unique())
+    table = (
+        evidence.join(by_station, on="model")
+        .join(info, on="model", how="left")
+        .with_columns(
+            label=pl.coalesce("label", "model"),
+            cost=pl.col("cost").fill_null(1),
+            **{
+                f"improvement_{s}": (100 * (1 - pl.col(f"rel_mae_{s}"))).round(1)
+                for s in stations
+            },
+        )
+        .sort("mean_mae")
+    )
+    return table.select(
+        "model",
+        "label",
+        "family",
+        "mean_mae",
+        "improvement_pct",
+        *(f"improvement_{s}" for s in stations),
+        "beats_naive",
+        "min_win_rate",
+        "significant",
+        "cost",
+        "cost_text",
+        "risk",
+    )
+
+
+def recommend(table: pl.DataFrame, tolerance: float = TIE_TOLERANCE_M) -> dict | None:
+    """Modelo recomendado: el más barato y sin riesgos entre los empatados al frente.
+
+    Candidatos: los que ganan a Naive en todas las estaciones y cuyo MAE medio
+    está a menos de ``tolerance`` del mejor. Entre ellos gana el que no tiene
+    riesgos declarados, luego el de menor costo y luego el de menor MAE.
+    """
+    models = table.filter(pl.col("beats_naive") & (pl.col("model") != BASELINES))
+    if models.is_empty():
+        return None
+    best = models.row(0, named=True)
+    tied = models.filter(pl.col("mean_mae") <= best["mean_mae"] + tolerance)
+    choice = tied.sort(pl.col("risk").fill_null("") != "", "cost", "mean_mae").row(
+        0, named=True
+    )
+    return {"choice": choice, "best": best, "tied": tied["model"].to_list()}
 
 
 def fold_horizon_errors(fold_comparison: pl.DataFrame, unique_id: str) -> pl.DataFrame:

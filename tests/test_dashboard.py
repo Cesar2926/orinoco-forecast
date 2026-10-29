@@ -369,7 +369,7 @@ def test_app_runs_with_runner_outputs(
 ) -> None:
     at = _app(monkeypatch, root)
     assert not at.exception
-    assert len(at.tabs) == 5
+    assert len(at.tabs) == 6
     models = at.multiselect(key="h_models").options
     assert "arimax" in models and "TCN_s1" in models
 
@@ -383,3 +383,66 @@ def test_app_runs_without_predictions(
     assert any("predicciones" in str(info.value) for info in at.info)
     commands = " ".join(str(code.value) for code in at.code)
     assert "uv run python scripts/run_model.py naive" in commands
+
+
+def test_load_test_stations_merges_split_runs(tmp_path: Path) -> None:
+    pl.DataFrame(
+        {
+            "model": ["TIMESFM3", "CNNLSTM"],
+            "mae_ciudad_bolivar": [0.3, 0.6],
+            "mae_palua": [0.2, 0.5],
+            "mean_mae": [0.25, 0.55],
+        }
+    ).write_csv(tmp_path / "ranking_main.csv")
+    pl.DataFrame(
+        {
+            "unique_id": STATIONS,
+            "model": ["naive", "naive"],
+            "mae": [0.5, 0.4],
+        }
+    ).write_csv(tmp_path / "ranking_base_stations.csv")
+    stations = data.load_test_stations(tmp_path)
+    assert set(stations["model"]) == {"timesfm3", "cnn_lstm", "naive"}
+    ranking = data.rank_stations(stations)
+    assert ranking["model"].to_list() == ["timesfm3", "naive", "cnn_lstm"]
+    assert ranking["beats_naive"].to_list() == [True, None, False]
+    assert data.load_test_stations(tmp_path / "missing").is_empty()
+
+
+def test_recommend_prefers_cheap_riskless_model_among_ties() -> None:
+    rows = []
+    for model, mae, p in (
+        ("timesfm3", 0.300, 0.01),
+        ("booster", 0.308, 0.01),
+        ("tcn", 0.330, 0.3),
+    ):
+        for station in STATIONS:
+            rows.append(
+                {
+                    "model": model,
+                    "unique_id": station,
+                    "mae": mae,
+                    "rel_mae": mae / 0.5,
+                    "win_rate": 0.7,
+                    "p_max": p,
+                }
+            )
+    rows += [
+        {
+            "model": "naive",
+            "unique_id": s,
+            "mae": 0.5,
+            "rel_mae": 1.0,
+            "win_rate": None,
+            "p_max": None,
+        }
+        for s in STATIONS
+    ]
+    table = data.decision_table(pl.DataFrame(rows))
+    assert table["model"].to_list()[0] == "timesfm3"
+    assert table.filter(pl.col("model") == "booster")["improvement_pct"][0] == 38.4
+    rec = data.recommend(table)
+    assert rec["best"]["model"] == "timesfm3"
+    assert rec["choice"]["model"] == "booster"  # Tied within 1 cm, no risk.
+    assert rec["tied"] == ["timesfm3", "booster"]
+    assert data.recommend(table, tolerance=0.001)["choice"]["model"] == "timesfm3"

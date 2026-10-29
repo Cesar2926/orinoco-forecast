@@ -16,8 +16,10 @@ import polars as pl
 import streamlit as st
 
 from orinoco_forecast.dashboard import charts, data
+from orinoco_forecast.data.datasets import DEFAULT_OUTPUT
 from orinoco_forecast.data.loading import load_config, repo_root
 from orinoco_forecast.evaluation.backtest import load_backtest_config
+from orinoco_forecast.evaluation.execution import load_history
 from orinoco_forecast.features.dataset import build_model_frame, load_levels
 
 EXOGENOUS = repo_root() / "data" / "processed" / "orinoco_exogenous.parquet"
@@ -77,6 +79,9 @@ def cached_optional(path: str, stamp: float) -> pl.DataFrame | None:
 def cached_model_frame() -> pl.DataFrame:
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
+        if DEFAULT_OUTPUT.is_file():
+            # Same dataset (lag features) as run_model.py: live runs match validation.
+            return load_history()
         stage = "B" if EXOGENOUS.is_file() else "A"
         return build_model_frame(stage=stage, levels=cached_levels())
 
@@ -163,15 +168,17 @@ st.title("Orinoco Forecast")
 st.caption(
     "Explora los niveles del río Orinoco, las métricas de validación (24 cortes "
     "walk-forward y corte final) y prueba pronósticos a 14 días bajo demanda. "
-    f"El bloque de test final (desde {cfg['test_start']}) permanece reservado."
+    f"El bloque de test final (desde {cfg['test_start']}) se evalúa una sola vez "
+    "(pestaña Test final)."
 )
-tab_data, tab_compare, tab_val, tab_window, tab_live = st.tabs(
+tab_compare, tab_test, tab_live, tab_window, tab_data, tab_val = st.tabs(
     [
-        "Datos",
         "Comparativa de modelos",
-        "Validación de modelos",
-        "Pronóstico por ventana",
+        "Test final",
         "Probar predicción",
+        "Pronóstico por ventana",
+        "Datos",
+        "Detalle técnico (último corte)",
     ]
 )
 
@@ -261,39 +268,244 @@ with tab_compare:
             language="bash",
         )
     else:
-        st.info(
-            "**Comparativa oficial de validación.** Todos los modelos medidos con el "
-            "mismo protocolo: 24 cortes walk-forward (2021–2022), pronóstico de 1 a "
-            f"{cfg['horizon']} días y Naive (repetir el último nivel) como referencia. "
-            "Los modelos con semillas (`tcn`, `cnn_lstm`, `transformer`) se "
-            "promedian. El test final (desde "
-            f"{cfg['test_start']}) no se usa."
+        per_station = data.fold_station_mae(fold_comparison).with_columns(
+            label=pl.col("model").map_elements(
+                data.model_label, return_dtype=pl.String
+            ),
+            improvement=100 * (1 - pl.col("rel_mae")),
         )
-        best = ranking.row(0, named=True)  # Sorted: Naive winners first.
-        naive_mae = ranking.filter(pl.col("model") == data.BASELINES)["mean_mae"]
-        cols = st.columns(3)
-        cols[0].metric("Mejor modelo (MAE medio)", best["model"])
-        cols[1].metric("Su MAE medio", f"{best['mean_mae']:.3f} m")
-        if not naive_mae.is_empty():
-            cols[2].metric(
-                "Mejora frente a Naive",
-                f"{1 - best['mean_mae'] / naive_mae[0]:.0%}",
-                help=f"Naive: {naive_mae[0]:.3f} m",
+        table = data.decision_table(per_station)
+        rec = data.recommend(table)
+        station_names = {"ciudad_bolivar": "Ciudad Bolívar", "palua": "Palúa"}
+        st.caption(
+            "Validación en 24 cortes walk-forward (2021–2022), pronóstico de 1 a "
+            f"{cfg['horizon']} días. **% de mejora** = cuánto menos se equivoca el "
+            "modelo que Naive (repetir el último nivel observado). Las redes "
+            "promedian sus 3 semillas."
+        )
+        if rec:
+            choice, best = rec["choice"], rec["best"]
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Modelo recomendado", choice["label"])
+            c2.metric(
+                "Error medio",
+                f"{choice['mean_mae'] * 100:.0f} cm",
+                help="MAE de los días 1 a 14, promedio de las dos estaciones.",
             )
+            c3.metric("Menos error que Naive", f"{choice['improvement_pct']:.0f} %")
+            c4.metric(
+                "Más preciso",
+                best["label"],
+                help=f"Error medio: {best['mean_mae'] * 100:.1f} cm.",
+            )
+            if choice["model"] == best["model"]:
+                reason = (
+                    f"Es el más preciso ({best['improvement_pct']:.0f} % menos error "
+                    f"que Naive). Costo: {choice['cost_text']}."
+                )
+            else:
+                gap = (choice["mean_mae"] - best["mean_mae"]) * 100
+                caveat = best["risk"] or "mayor costo de cómputo"
+                reason = (
+                    f"Está empatado al frente con {best['label']}: la diferencia es "
+                    f"de {gap:.1f} cm, menor que la variación entre cortes "
+                    f"(~{data.TIE_TOLERANCE_M * 100:.0f} cm), así que no es "
+                    f"concluyente. A igual precisión se prefiere {choice['label']}: "
+                    f"no tiene riesgos declarados y su costo es bajo "
+                    f"({choice['cost_text']}). Cautela con {best['label']}: {caveat}."
+                )
+            st.success(f"**Recomendación: {choice['label']}.** {reason}")
 
-        st.subheader("Ranking (criterio del README)")
+        st.subheader("¿Cuánto mejora cada modelo sobre Naive?")
+        st.altair_chart(
+            charts.improvement_chart(
+                per_station.filter(pl.col("model") != data.BASELINES).with_columns(
+                    pl.col("unique_id").replace(station_names)
+                )
+            ),
+            width="stretch",
+        )
+
+        st.subheader("Tabla de decisión")
         st.markdown(
-            "1) El modelo debe tener `rel_mae < 1` en **cada** estación. 2) Entre los "
-            "que cumplen, gana el **menor MAE medio** entre Ciudad Bolívar y Palúa "
-            "(días 1 a 14, promedio de los 24 cortes)."
+            "Precisión, consistencia, costo y riesgos de cada modelo. **Gana a Naive "
+            "en** es el peor caso entre estaciones (porcentaje de los 24 cortes); "
+            "**evidencia estadística** lista las estaciones donde el test de signos "
+            "da p < 0,05 en todas las semillas."
+        )
+        shown = table.filter(pl.col("model") != data.BASELINES).with_columns(
+            pl.col("mean_mae") * 100,
+            pl.col("min_win_rate") * 100,
+            pl.col("significant")
+            .str.replace("ciudad_bolivar", "Ciudad Bolívar")
+            .str.replace("palua", "Palúa")
+            .replace("", "—"),
         )
         st.dataframe(
-            ranking,
+            shown.select(
+                "label",
+                "family",
+                "mean_mae",
+                "improvement_pct",
+                "improvement_ciudad_bolivar",
+                "improvement_palua",
+                "min_win_rate",
+                "significant",
+                "cost_text",
+                "risk",
+            ),
             hide_index=True,
             column_config={
-                "rank": st.column_config.NumberColumn("#"),
-                "model": "Modelo",
+                "label": "Modelo",
+                "family": "Tipo",
+                "mean_mae": st.column_config.NumberColumn(
+                    "Error medio (cm)", format="%.1f"
+                ),
+                "improvement_pct": st.column_config.ProgressColumn(
+                    "Mejora sobre Naive",
+                    format="%.0f %%",
+                    min_value=0,
+                    max_value=100,
+                ),
+                "improvement_ciudad_bolivar": st.column_config.NumberColumn(
+                    "Mejora C. Bolívar", format="%.0f %%"
+                ),
+                "improvement_palua": st.column_config.NumberColumn(
+                    "Mejora Palúa", format="%.0f %%"
+                ),
+                "min_win_rate": st.column_config.NumberColumn(
+                    "Gana a Naive en", format="%.0f %% de cortes"
+                ),
+                "significant": "Evidencia estadística",
+                "cost_text": "Costo de cómputo",
+                "risk": "Riesgos",
+            },
+        )
+
+        st.subheader("¿En qué plazo gana cada modelo?")
+        st.markdown(
+            "% de mejora sobre Naive en cada día del pronóstico. Azul: el modelo se "
+            "equivoca menos que Naive ese día; rojo: más. Los primeros días son los "
+            "difíciles porque el río casi no cambia de un día al siguiente."
+        )
+        station = st.selectbox(
+            "Estación",
+            sorted(fold_comparison["unique_id"].unique()),
+            format_func=lambda s: STATION_LABELS.get(s, s),
+            key="c_station",
+        )
+        errors = data.fold_horizon_errors(fold_comparison, station)
+        st.altair_chart(
+            charts.improvement_heatmap(
+                errors.filter(pl.col("model") != data.BASELINES).with_columns(
+                    label=pl.col("model").map_elements(
+                        data.model_label, return_dtype=pl.String
+                    ),
+                    improvement=100 * (1 - pl.col("rel_mae")),
+                )
+            ),
+            width="stretch",
+        )
+        with st.expander("Detalle estadístico (MAE en metros y test de signos)"):
+            st.altair_chart(charts.horizon_chart(errors), width="stretch")
+            st.dataframe(
+                per_station.filter(pl.col("unique_id") == station).select(
+                    "label", "mae", "rel_mae", "win_rate", "p_min", "p_max"
+                ),
+                hide_index=True,
+                column_config={
+                    "label": "Modelo",
+                    "mae": st.column_config.NumberColumn("MAE (m)", format="%.3f"),
+                    "rel_mae": st.column_config.NumberColumn("rel_mae", format="%.3f"),
+                    "win_rate": st.column_config.NumberColumn(
+                        "Cortes ganados", format="%.2f"
+                    ),
+                    "p_min": st.column_config.NumberColumn("p mín", format="%.3f"),
+                    "p_max": st.column_config.NumberColumn("p máx", format="%.3f"),
+                },
+            )
+            st.caption(
+                "TimesFM 3 es preentrenado y podría haber visto datos del Orinoco. "
+                "Los resultados del CNN-LSTM guardados en `reports/` son de CPU; el "
+                "README cita su corrida en GPU (0,350 m)."
+            )
+
+
+with tab_test:
+    test_stations = data.load_test_stations()
+    if test_stations.is_empty():
+        st.info(
+            "Todavía no hay resultados del test final en `reports/test/`. Se generan "
+            "**una sola vez**, después de elegir el modelo con la validación:"
+        )
+        st.code(
+            "uv run python scripts/make_report.py --eval test --windows 0 "
+            "--step-days 14 --fit-once --output reports/test/ranking_all.csv",
+            language="bash",
+        )
+    else:
+        st.info(
+            f"**Test final ({cfg['test_start']} a 2024-12-31), evaluado una sola "
+            "vez.** 52 ventanas de 14 días sin solaparse (cortes del 2023-01-01 al "
+            "2024-12-15). Cada modelo se entrena una vez con los datos hasta el "
+            "primer corte y pronostica cada ventana con la historia real disponible "
+            "en ese corte; `booster`, `arimax` y `tcn` se reajustan en cada corte. "
+            "Mismo criterio que la validación: `rel_mae < 1` en cada estación y "
+            "menor MAE medio."
+        )
+        test_ranking = data.rank_stations(test_stations).with_columns(
+            label=pl.col("model").map_elements(
+                data.model_label, return_dtype=pl.String
+            ),
+            improvement=pl.col("mean_mae"),
+        )
+        naive_ref = test_ranking.filter(pl.col("model") == data.BASELINES)["mean_mae"]
+        if not naive_ref.is_empty():
+            test_ranking = test_ranking.with_columns(
+                improvement=100 * (1 - pl.col("mean_mae") / naive_ref[0])
+            )
+        val_rank = data.fold_ranking(fold_comparison)
+        if not val_rank.is_empty():
+            test_ranking = test_ranking.join(
+                val_rank.select("model", pl.col("rank").alias("val_rank")),
+                on="model",
+                how="left",
+            )
+        best = test_ranking.row(0, named=True)
+        naive_test = test_ranking.filter(pl.col("model") == data.BASELINES)
+        cols = st.columns(3)
+        cols[0].metric("Mejor modelo en test", best["label"])
+        cols[1].metric("Error medio", f"{best['mean_mae'] * 100:.0f} cm")
+        if not naive_test.is_empty():
+            cols[2].metric(
+                "Menos error que Naive",
+                f"{best['improvement']:.0f} %",
+                help=f"Naive: {naive_test['mean_mae'][0] * 100:.0f} cm",
+            )
+        st.subheader("Ranking en el test final")
+        st.dataframe(
+            test_ranking.select(
+                "rank",
+                *(["val_rank"] if "val_rank" in test_ranking.columns else []),
+                "label",
+                "beats_naive",
+                "improvement",
+                "mean_mae",
+                "mae_ciudad_bolivar",
+                "mae_palua",
+            ),
+            hide_index=True,
+            column_config={
+                "rank": st.column_config.NumberColumn("# test"),
+                "val_rank": st.column_config.NumberColumn(
+                    "# validación",
+                    help="Puesto en los 24 cortes de validación.",
+                ),
+                "label": "Modelo",
                 "beats_naive": st.column_config.CheckboxColumn("Gana a Naive"),
+                "improvement": st.column_config.ProgressColumn(
+                    "Mejora sobre Naive", format="%.0f %%", min_value=0, max_value=100
+                ),
                 "mean_mae": st.column_config.NumberColumn(
                     "MAE medio (m)", format="%.3f"
                 ),
@@ -304,51 +516,23 @@ with tab_compare:
             },
         )
         st.altair_chart(
-            charts.ranking_chart(data.fold_station_mae(fold_comparison)),
+            charts.improvement_chart(
+                test_stations.filter(
+                    ~pl.col("model").is_in([data.BASELINES, "seasonal_naive"])
+                ).with_columns(
+                    label=pl.col("model").map_elements(
+                        data.model_label, return_dtype=pl.String
+                    ),
+                    improvement=100 * (1 - pl.col("rel_mae")),
+                )
+            ),
             width="stretch",
         )
         st.caption(
-            "Diferencias menores que unos 0,01 m quedan dentro de la dispersión entre "
-            "cortes y semillas: no son concluyentes. TimesFM 3 es preentrenado y "
-            "podría haber visto datos del Orinoco. Los resultados guardados en "
-            "`reports/` del CNN-LSTM son de CPU; el README cita su corrida en GPU."
-        )
-
-        st.subheader("Error por día de horizonte (24 cortes)")
-        st.markdown(
-            "Cómo crece el error del día 1 al 14. Una curva por debajo de la de Naive "
-            "(punteada) en un día significa que el modelo gana en ese plazo."
-        )
-        station = st.selectbox(
-            "Estación",
-            sorted(fold_comparison["unique_id"].unique()),
-            format_func=lambda s: STATION_LABELS.get(s, s),
-            key="c_station",
-        )
-        st.altair_chart(
-            charts.horizon_chart(data.fold_horizon_errors(fold_comparison, station)),
-            width="stretch",
-        )
-        detail = data.fold_station_mae(fold_comparison).filter(
-            pl.col("unique_id") == station
-        )
-        st.markdown(
-            "**Detalle por estación.** `p` es el test de signos contra Naive (rango "
-            "entre semillas); `p < 0,05` indica evidencia de que el modelo gana."
-        )
-        st.dataframe(
-            detail.select("model", "mae", "rel_mae", "win_rate", "p_min", "p_max"),
-            hide_index=True,
-            column_config={
-                "model": "Modelo",
-                "mae": st.column_config.NumberColumn("MAE (m)", format="%.3f"),
-                "rel_mae": st.column_config.NumberColumn("rel_mae", format="%.3f"),
-                "win_rate": st.column_config.NumberColumn(
-                    "Cortes ganados", format="%.2f"
-                ),
-                "p_min": st.column_config.NumberColumn("p mín", format="%.3f"),
-                "p_max": st.column_config.NumberColumn("p máx", format="%.3f"),
-            },
+            "El test mide cómo rinde en datos nunca vistos el modelo elegido con la "
+            "validación; no sirve para volver a elegir (eso sesgaría el resultado). "
+            "`seasonal_naive` (mismo día del año anterior) se muestra como segunda "
+            "referencia."
         )
 
 with tab_val:

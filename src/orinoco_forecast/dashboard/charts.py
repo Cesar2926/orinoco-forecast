@@ -25,6 +25,7 @@ PALETTE = [
     "#7f7f7f",
 ]
 OBSERVED = "Observado"
+STATION_COLORS = ["#4c78a8", "#f58518"]
 HEIGHT = 340
 _DATE = alt.X("ds:T", title="Fecha")
 
@@ -88,6 +89,83 @@ def horizon_chart(errors: pl.DataFrame) -> alt.Chart:
         )
         .properties(height=HEIGHT)
     )
+
+
+def improvement_chart(per_station: pl.DataFrame) -> alt.LayerChart:
+    """% de mejora sobre Naive por modelo y estación, con la cifra en cada barra.
+
+    ``per_station`` trae ``label``, ``unique_id`` e ``improvement`` (en %).
+    """
+    order = (
+        per_station.group_by("label")
+        .agg(pl.col("improvement").mean())
+        .sort("improvement", descending=True)["label"]
+        .to_list()
+    )
+    base = alt.Chart(per_station).encode(
+        y=alt.Y("label:N", title=None, sort=order),
+        yOffset=alt.YOffset("unique_id:N"),
+        x=alt.X(
+            "improvement:Q",
+            title="% menos error que Naive (más es mejor)",
+            scale=alt.Scale(domainMin=0),
+        ),
+        color=alt.Color(
+            "unique_id:N",
+            title="Estación",
+            scale=alt.Scale(range=STATION_COLORS),
+            legend=alt.Legend(orient="bottom"),
+        ),
+        tooltip=[
+            alt.Tooltip("label:N", title="Modelo"),
+            alt.Tooltip("unique_id:N", title="Estación"),
+            alt.Tooltip("improvement:Q", title="% mejora", format=".1f"),
+            alt.Tooltip("mae:Q", title="MAE (m)", format=".3f"),
+        ],
+    )
+    bars = base.mark_bar()
+    text = base.mark_text(align="left", dx=3, fontSize=11).encode(
+        text=alt.Text("improvement:Q", format=".0f"), color=alt.value("#888")
+    )
+    return (bars + text).properties(height=HEIGHT + 40)
+
+
+def improvement_heatmap(errors: pl.DataFrame) -> alt.LayerChart:
+    """Mapa de calor modelo × día de horizonte del % de mejora sobre Naive.
+
+    ``errors`` trae ``label``, ``horizon`` e ``improvement``. Azul: el modelo
+    gana a Naive ese día; rojo: pierde.
+    """
+    order = (
+        errors.group_by("label")
+        .agg(pl.col("improvement").mean())
+        .sort("improvement", descending=True)["label"]
+        .to_list()
+    )
+    base = alt.Chart(errors).encode(
+        x=alt.X("horizon:O", title="Día de horizonte (días después del corte)"),
+        y=alt.Y("label:N", title=None, sort=order),
+    )
+    cells = base.mark_rect().encode(
+        color=alt.Color(
+            "improvement:Q",
+            title="% mejora",
+            scale=alt.Scale(scheme="redblue", domainMid=0),
+        ),
+        tooltip=[
+            alt.Tooltip("label:N", title="Modelo"),
+            alt.Tooltip("horizon:O", title="Día"),
+            alt.Tooltip("improvement:Q", title="% mejora", format=".1f"),
+            alt.Tooltip("mae:Q", title="MAE (m)", format=".3f"),
+        ],
+    )
+    text = base.mark_text(fontSize=10).encode(
+        text=alt.Text("improvement:Q", format=".0f"),
+        color=alt.condition(
+            "abs(datum.improvement) > 50", alt.value("white"), alt.value("black")
+        ),
+    )
+    return (cells + text).properties(height=34 * len(order) + 30)
 
 
 def ranking_chart(per_station: pl.DataFrame) -> alt.Chart:
