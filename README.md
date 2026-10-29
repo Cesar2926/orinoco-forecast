@@ -241,7 +241,7 @@ Se selecciona **un único modelo final para ambas estaciones**. Los hiperparáme
 justificación y las fuentes de datos externas de cada modelo están detallados en
 [`docs/plan_modelos.md`](docs/plan_modelos.md).
 Implementación, ajuste y resultados de XGBoost, TCN y CNN-LSTM, con la comparación frente a ARIMAX: [`docs/modelos_arboles_cnn.md`](docs/modelos_arboles_cnn.md).
-Transformer: [`docs/modelos_transformer_timesfm.md`](docs/modelos_transformer_timesfm.md).
+Transformer y TimesFM 3: [`docs/modelos_transformer_timesfm.md`](docs/modelos_transformer_timesfm.md).
 
 | Familia | Modelo | Librería | Notas |
 |---|---|---|---|
@@ -254,7 +254,7 @@ Transformer: [`docs/modelos_transformer_timesfm.md`](docs/modelos_transformer_ti
 | Híbrido | `CNN-LSTM` | PyTorch propio | Convoluciones causales que extraen características y una LSTM que las lee en orden (neuralforecast no trae un híbrido). |
 | Estadístico | `ARIMAX` | statsmodels | Runner de Daniel: ARIMA(2,1,2) fijo con rezagos de estaciones aguas arriba, lluvia y ONI como exógenas. |
 | Transformer | Encoder temporal | PyTorch propio | `nn.TransformerEncoderLayer` sobre las mismas ventanas, escalado y entrenamiento que el CNN-LSTM; solo cambia la red. |
-| Fundacional (Google) | `TimesFM 3.0` | timesfm | Modelo preentrenado usado *zero-shot* (sin reentrenamiento); acepta covariables. |
+| Fundacional (Google) | `TimesFM 3.0` | timesfm | Modelo preentrenado usado *zero-shot* (sin reentrenamiento); acepta covariables pasadas, pero la búsqueda las descartó. |
 
 **Por qué los baselines son obligatorios:** el Orinoco es un río de gran caudal que cambia
 lentamente, así que la persistencia a 14 días es un competidor difícil de superar. Un
@@ -271,28 +271,28 @@ la atención frente a convolución + LSTM.
 
 Promedio de 24 cortes (2021-01-26 a 2022-12-17), MAE en metros y `rel_mae` contra Naive,
 todos medidos con `run_model.py <modelo> --against naive --folds`. TCN, CNN-LSTM y
-Transformer son la media de 3 semillas. Detalle, hiperparámetros y limitaciones en
+Transformer son la media de 3 semillas; TimesFM 3 es determinista. Detalle, hiperparámetros y limitaciones en
 [`docs/modelos_arboles_cnn.md`](docs/modelos_arboles_cnn.md) y
 [`docs/modelos_transformer_timesfm.md`](docs/modelos_transformer_timesfm.md). Es validación: el bloque de
 test (2023 en adelante) no se ha evaluado.
 
-| Estación | Horizonte | Naive (MAE) | Booster | TCN (GPU) | CNN-LSTM (GPU) | ARIMAX | Transformer (CPU) |
-|---|---|---|---|---|---|---|---|
-| Ciudad Bolívar | día 7 | 0,526 | 0,279 / 0,53 | 0,274 / 0,52 | 0,307 / 0,58 | 0,284 / 0,54 | 0,272 / 0,52 |
-| Ciudad Bolívar | día 14 | 1,064 | 0,444 / 0,42 | 0,502 / 0,47 | 0,620 / 0,58 | 0,576 / 0,54 | 0,522 / 0,49 |
-| Ciudad Bolívar | días 1 a 14 | 0,570 | 0,278 / 0,49 | 0,292 / 0,51 | 0,337 / 0,59 | 0,315 / 0,55 | 0,294 / 0,52 |
-| Palúa | día 7 | 0,435 | 0,360 / 0,83 | 0,360 / 0,83 | 0,378 / 0,87 | 0,377 / 0,87 | 0,375 / 0,86 |
-| Palúa | día 14 | 0,891 | 0,548 / 0,62 | 0,560 / 0,63 | 0,613 / 0,69 | 0,662 / 0,74 | 0,608 / 0,68 |
-| Palúa | días 1 a 14 | 0,488 | 0,341 / 0,70 | 0,342 / 0,70 | 0,364 / 0,75 | 0,387 / 0,79 | 0,357 / 0,73 |
-| **MAE medio de las dos estaciones (días 1 a 14)** | | 0,529 | **0,309** | 0,317 | 0,350 | 0,351 | 0,326 |
+| Estación | Horizonte | Naive (MAE) | Booster | TCN (GPU) | CNN-LSTM (GPU) | ARIMAX | Transformer (CPU) | TimesFM 3 (CPU) |
+|---|---|---|---|---|---|---|---|---|
+| Ciudad Bolívar | día 7 | 0,526 | 0,279 / 0,53 | 0,274 / 0,52 | 0,307 / 0,58 | 0,284 / 0,54 | 0,272 / 0,52 | 0,278 / 0,53 |
+| Ciudad Bolívar | día 14 | 1,064 | 0,444 / 0,42 | 0,502 / 0,47 | 0,620 / 0,58 | 0,576 / 0,54 | 0,522 / 0,49 | 0,507 / 0,48 |
+| Ciudad Bolívar | días 1 a 14 | 0,570 | 0,278 / 0,49 | 0,292 / 0,51 | 0,337 / 0,59 | 0,315 / 0,55 | 0,294 / 0,52 | 0,287 / 0,50 |
+| Palúa | día 7 | 0,435 | 0,360 / 0,83 | 0,360 / 0,83 | 0,378 / 0,87 | 0,377 / 0,87 | 0,375 / 0,86 | 0,345 / 0,79 |
+| Palúa | día 14 | 0,891 | 0,548 / 0,62 | 0,560 / 0,63 | 0,613 / 0,69 | 0,662 / 0,74 | 0,608 / 0,68 | 0,486 / 0,55 |
+| Palúa | días 1 a 14 | 0,488 | 0,341 / 0,70 | 0,342 / 0,70 | 0,364 / 0,75 | 0,387 / 0,79 | 0,357 / 0,73 | 0,313 / 0,64 |
+| **MAE medio de las dos estaciones (días 1 a 14)** | | 0,529 | 0,309 | 0,317 | 0,350 | 0,351 | 0,326 | **0,300** |
 
 Cada celda es `MAE / rel_mae`. El hardware importa para leer la tabla (sección siguiente):
-booster, ARIMAX y Transformer corrieron en CPU, TCN en una GPU de Colab y el CNN-LSTM en ambos.
+booster, ARIMAX, Transformer y TimesFM 3 corrieron en CPU, TCN en una GPU de Colab y el CNN-LSTM en ambos.
 
 **Lectura.**
 
-- Los cinco modelos cumplen `rel_mae < 1` en cada estación y horizonte. Por el criterio de
-  selección (menor MAE medio entre estaciones) el orden es booster (0,309), TCN (0,317),
+- Los seis modelos cumplen `rel_mae < 1` en cada estación y horizonte. Por el criterio de
+  selección (menor MAE medio entre estaciones) el orden es TimesFM 3 (0,300), booster (0,309), TCN (0,317),
   Transformer (0,326), CNN-LSTM (0,350) y ARIMAX (0,351); los dos últimos están empatados.
 - El TCN **empata con el booster en Palúa** (0,342 frente a 0,341) y queda algo por detrás
   en Ciudad Bolívar (0,292 frente a 0,278). La ventaja del booster sobre el TCN es de unos
@@ -307,6 +307,11 @@ booster, ARIMAX y Transformer corrieron en CPU, TCN en una GPU de Colab y el CNN
   Ciudad Bolívar a 7 días tiene el menor MAE de la tabla (0,272), pero la diferencia con el
   TCN (0,274) es despreciable. Palúa a 7 días sigue sin evidencia contra Naive (p = 0,54 a
   1,00 según semilla).
+- **TimesFM 3**, sin entrenar con un solo dato del Orinoco, tiene el menor MAE medio y es el
+  mejor en **Palúa** a 7 y a 14 días (0,345 y 0,486). En Ciudad Bolívar queda a la par del
+  booster y del TCN. Su ventaja sobre el booster (0,009 m) es menor que la dispersión entre
+  cortes, y **no se puede descartar que su preentrenamiento incluya datos del Orinoco de
+  2021–2022**, lo que haría optimista esta validación.
 - **Palúa a 7 días** es el punto débil de todos. Test de signos (`sign_test_p`, MAE contra
   Naive): booster p = 0,84 (gana en 54 % de los cortes), TCN p = 0,54 a 1,00 según semilla,
   CNN-LSTM p = 0,31 a 0,84; sin evidencia de que ganen. El ARIMAX da p = 0,023 (gana en
@@ -329,6 +334,7 @@ booster, ARIMAX y Transformer corrieron en CPU, TCN en una GPU de Colab y el CNN
 | TCN | GPU de Colab (T4) | no medida |
 | CNN-LSTM | GPU de Colab (T4); también se midió en CPU (local) | CPU: 2 h 16 min a 2 h 28 min; GPU: no medida |
 | Transformer | CPU (local) | unas 7 h, con la CPU compartida con otras corridas |
+| TimesFM 3 | CPU (local) | 53 s (solo inferencia) |
 
 - **CNN-LSTM, CPU contra GPU** (mismo código, datos y comando). Criterio fijado antes de ver
   el resultado: por estación y horizonte, la diferencia del MAE medio debe ser menor que la
@@ -735,7 +741,7 @@ result.write()  # data/predictions/<runner>/predictions.parquet
 | CNN-LSTM | `cnn_lstm` | Implementado (PyTorch propio) |
 | LSTM | `nsmt` | Solo estructura |
 | Transformer | `transformer` | Implementado (PyTorch propio) |
-| TimesFM 3.0 | `timesfm3` | Solo estructura (extra `timesfm` opcional) |
+| TimesFM 3.0 | `timesfm3` | Implementado, *zero-shot* (extra `timesfm` opcional) |
 
 ### Dashboard
 
@@ -848,9 +854,9 @@ código entre notebooks.
 | Estadísticas de dos runners (`compute_statistics`) | Disponible |
 | Comparación walk-forward modelo vs baseline (`--folds`) | Disponible: 24 pliegues, mejora, dispersión y test de signos |
 | LSTM (neuralforecast) | Solo estructura (`NotImplementedError`) |
-| TimesFM 3.0 | Solo estructura (`NotImplementedError`) |
+| TimesFM 3.0 | Runner `timesfm3` implementado (*zero-shot*), búsqueda de 6 configuraciones y validado en 24 cortes (CPU) |
 | Dashboard Streamlit | Disponible sobre `predictions.parquet`/`statistics.parquet` |
-| Comparación en validación y selección del modelo final | Booster, TCN, CNN-LSTM, Transformer y ARIMAX evaluados en 24 cortes ([detalle](docs/modelos_arboles_cnn.md)); falta acordar la elección |
+| Comparación en validación y selección del modelo final | Booster, TCN, CNN-LSTM, Transformer, TimesFM 3 y ARIMAX evaluados en 24 cortes ([detalle](docs/modelos_arboles_cnn.md)); falta acordar la elección |
 | Evaluación del modelo elegido en el test final y reporte | Pendiente |
 | Ensamble de modelos | Fuera del alcance; experimento opcional |
 
@@ -860,7 +866,8 @@ Completos: **booster (XGBoost), TCN, CNN-LSTM y Transformer** están implementad
 (20 pruebas cada uno) y validados en 24 cortes; el **ARIMAX** de Daniel está validado en los
 mismos cortes. Por validación, el booster y el TCN quedan prácticamente empatados al frente
 (MAE medio de 0,309 y 0,317 m), el Transformer queda cerca (0,326) y el CNN-LSTM no compensa
-su costo. Falta lo que depende
+su costo. TimesFM 3, sin entrenamiento, tiene el menor MAE medio (0,300), con la cautela de una
+posible contaminación de su preentrenamiento. Falta lo que depende
 del equipo: acordar el protocolo y ejecutar **una sola vez** la evaluación final sobre
 2023-2024 con todos los modelos, sin haberla tocado antes. Si el modelo se elige por el
 resultado de ese bloque, el error reportado deja de ser una estimación honesta (sesgo de
