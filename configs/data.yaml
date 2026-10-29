@@ -29,6 +29,29 @@ exogenous:
       caicara: "data/external/nasa_power_caicara.csv"
       ciudad_bolivar: "data/external/nasa_power_ciudad_bolivar.csv"
       palua: "data/external/nasa_power_palua.csv"
+  # Tributary-basin rain points fetched by scripts/download_nasa_power.py into
+  # data/external/nasa_power_<name>.csv (same layout as the station files).
+  # Not read by the model frame: adding rain_* columns would change every
+  # runner's inputs. Coordinates are approximate town locations; POWER cells
+  # are 0.5 x 0.625 degrees.
+  nasa_power_basin:
+    start: "19810101"
+    end: "20251231"
+    community: AG
+    points:
+      # Caroni basin above Guri (Bajo Caroni releases near Palua).
+      caroni_kavanayen: {lat: 5.62, lon: -61.78}
+      caroni_uriman: {lat: 5.35, lon: -62.75}
+      caroni_canaima: {lat: 6.24, lon: -62.85}
+      paragua_la_paragua: {lat: 6.83, lon: -63.33}
+      guri_embalse: {lat: 7.50, lon: -62.85}
+      # Orinoco sub-basins: Andes/Llanos and Guayana sectors.
+      apure_san_fernando: {lat: 7.89, lon: -67.47}
+      meta_orocue: {lat: 4.79, lon: -71.34}
+      meta_puerto_carreno: {lat: 6.19, lon: -67.49}
+      guaviare_san_jose: {lat: 2.57, lon: -72.64}
+      ventuari_manapiare: {lat: 5.33, lon: -66.05}
+      caura_maripa: {lat: 7.41, lon: -65.18}
   noaa_oni:
     path: "data/external/noaa_oni.ascii.txt"
     publication_lag_months: 3
