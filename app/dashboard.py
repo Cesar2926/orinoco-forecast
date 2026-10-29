@@ -21,7 +21,15 @@ from orinoco_forecast.evaluation.backtest import load_backtest_config
 from orinoco_forecast.features.dataset import build_model_frame, load_levels
 
 EXOGENOUS = repo_root() / "data" / "processed" / "orinoco_exogenous.parquet"
-MODEL_HINTS = ("naive", "seasonal_naive", "arimax", "booster", "tcn")
+MODEL_HINTS = (
+    "naive",
+    "arimax",
+    "booster",
+    "tcn",
+    "cnn_lstm",
+    "transformer",
+    "timesfm3",
+)
 STATION_LABELS = {
     "ciudad_bolivar": "Ciudad Bolívar (ciudad_bolivar)",
     "palua": "Palúa (palua)",
@@ -157,9 +165,10 @@ st.caption(
     "walk-forward y corte final) y prueba pronósticos a 14 días bajo demanda. "
     f"El bloque de test final (desde {cfg['test_start']}) permanece reservado."
 )
-tab_data, tab_val, tab_window, tab_live = st.tabs(
+tab_data, tab_compare, tab_val, tab_window, tab_live = st.tabs(
     [
         "Datos",
+        "Comparativa de modelos",
         "Validación de modelos",
         "Pronóstico por ventana",
         "Probar predicción",
@@ -238,6 +247,108 @@ with tab_data:
         st.altair_chart(
             charts.oni_chart(data.oni_series(exogenous).filter(window)),
             width="stretch",
+        )
+
+with tab_compare:
+    ranking = data.fold_ranking(fold_comparison)
+    if ranking.is_empty():
+        st.info(
+            "Sin resultados de 24 cortes. Genérelos para cada modelo con `--folds` "
+            "(o copie `reports/predictions/` a `data/predictions/`):"
+        )
+        st.code(
+            "\n".join(f"{data.run_command(m)} --folds" for m in MODEL_HINTS[1:]),
+            language="bash",
+        )
+    else:
+        st.info(
+            "**Comparativa oficial de validación.** Todos los modelos medidos con el "
+            "mismo protocolo: 24 cortes walk-forward (2021–2022), pronóstico de 1 a "
+            f"{cfg['horizon']} días y Naive (repetir el último nivel) como referencia. "
+            "Los modelos con semillas (`tcn`, `cnn_lstm`, `transformer`) se "
+            "promedian. El test final (desde "
+            f"{cfg['test_start']}) no se usa."
+        )
+        best = ranking.row(0, named=True)  # Sorted: Naive winners first.
+        naive_mae = ranking.filter(pl.col("model") == data.BASELINES)["mean_mae"]
+        cols = st.columns(3)
+        cols[0].metric("Mejor modelo (MAE medio)", best["model"])
+        cols[1].metric("Su MAE medio", f"{best['mean_mae']:.3f} m")
+        if not naive_mae.is_empty():
+            cols[2].metric(
+                "Mejora frente a Naive",
+                f"{1 - best['mean_mae'] / naive_mae[0]:.0%}",
+                help=f"Naive: {naive_mae[0]:.3f} m",
+            )
+
+        st.subheader("Ranking (criterio del README)")
+        st.markdown(
+            "1) El modelo debe tener `rel_mae < 1` en **cada** estación. 2) Entre los "
+            "que cumplen, gana el **menor MAE medio** entre Ciudad Bolívar y Palúa "
+            "(días 1 a 14, promedio de los 24 cortes)."
+        )
+        st.dataframe(
+            ranking,
+            hide_index=True,
+            column_config={
+                "rank": st.column_config.NumberColumn("#"),
+                "model": "Modelo",
+                "beats_naive": st.column_config.CheckboxColumn("Gana a Naive"),
+                "mean_mae": st.column_config.NumberColumn(
+                    "MAE medio (m)", format="%.3f"
+                ),
+                "mae_ciudad_bolivar": st.column_config.NumberColumn(
+                    "Ciudad Bolívar (m)", format="%.3f"
+                ),
+                "mae_palua": st.column_config.NumberColumn("Palúa (m)", format="%.3f"),
+            },
+        )
+        st.altair_chart(
+            charts.ranking_chart(data.fold_station_mae(fold_comparison)),
+            width="stretch",
+        )
+        st.caption(
+            "Diferencias menores que unos 0,01 m quedan dentro de la dispersión entre "
+            "cortes y semillas: no son concluyentes. TimesFM 3 es preentrenado y "
+            "podría haber visto datos del Orinoco. Los resultados guardados en "
+            "`reports/` del CNN-LSTM son de CPU; el README cita su corrida en GPU."
+        )
+
+        st.subheader("Error por día de horizonte (24 cortes)")
+        st.markdown(
+            "Cómo crece el error del día 1 al 14. Una curva por debajo de la de Naive "
+            "(punteada) en un día significa que el modelo gana en ese plazo."
+        )
+        station = st.selectbox(
+            "Estación",
+            sorted(fold_comparison["unique_id"].unique()),
+            format_func=lambda s: STATION_LABELS.get(s, s),
+            key="c_station",
+        )
+        st.altair_chart(
+            charts.horizon_chart(data.fold_horizon_errors(fold_comparison, station)),
+            width="stretch",
+        )
+        detail = data.fold_station_mae(fold_comparison).filter(
+            pl.col("unique_id") == station
+        )
+        st.markdown(
+            "**Detalle por estación.** `p` es el test de signos contra Naive (rango "
+            "entre semillas); `p < 0,05` indica evidencia de que el modelo gana."
+        )
+        st.dataframe(
+            detail.select("model", "mae", "rel_mae", "win_rate", "p_min", "p_max"),
+            hide_index=True,
+            column_config={
+                "model": "Modelo",
+                "mae": st.column_config.NumberColumn("MAE (m)", format="%.3f"),
+                "rel_mae": st.column_config.NumberColumn("rel_mae", format="%.3f"),
+                "win_rate": st.column_config.NumberColumn(
+                    "Cortes ganados", format="%.2f"
+                ),
+                "p_min": st.column_config.NumberColumn("p mín", format="%.3f"),
+                "p_max": st.column_config.NumberColumn("p máx", format="%.3f"),
+            },
         )
 
 with tab_val:

@@ -90,6 +90,36 @@ def horizon_chart(errors: pl.DataFrame) -> alt.Chart:
     )
 
 
+def ranking_chart(per_station: pl.DataFrame) -> alt.Chart:
+    """MAE de 24 cortes por modelo, una barra por estación; orden por MAE medio."""
+    order = (
+        per_station.group_by("model")
+        .agg(pl.col("mae").mean())
+        .sort("mae")["model"]
+        .to_list()
+    )
+    return (
+        alt.Chart(per_station)
+        .mark_bar()
+        .encode(
+            y=alt.Y("model:N", title="Modelo", sort=order),
+            x=alt.X("mae:Q", title="MAE medio de los 24 cortes, días 1–14 (m)"),
+            yOffset=alt.YOffset("unique_id:N"),
+            color=alt.Color("unique_id:N", title="Estación"),
+            opacity=alt.condition(
+                alt.datum.model == "naive", alt.value(0.45), alt.value(1.0)
+            ),
+            tooltip=[
+                "model",
+                "unique_id",
+                alt.Tooltip("mae:Q", format=".3f"),
+                alt.Tooltip("rel_mae:Q", format=".3f"),
+            ],
+        )
+        .properties(height=HEIGHT + 60)
+    )
+
+
 def fold_timeline_chart(timeline: pl.DataFrame) -> alt.Chart:
     """MAE por fecha de corte en los 24 pliegues walk-forward; Naive punteado."""
     return (
