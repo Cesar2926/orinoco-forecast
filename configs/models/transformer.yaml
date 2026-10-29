@@ -4,26 +4,26 @@
 # linear head reads the last day's token to predict the horizon
 # (configs/backtest.yaml). Custom PyTorch on the CNN-LSTM runner: same windows,
 # scaling, training loop and validation, only the network changes.
-# Starting values, not tuned yet: run scripts/tune_transformer.py.
+# Tuned with scripts/tune_transformer.py (best of 20 trials: trial 18).
 
 # "difference" models the daily change and rebuilds levels from the level at the
 # cutoff (persistence = zero prediction), like the TCN and the CNN-LSTM.
 target_transform: difference
 
 # Days of history per window (same search grid as the CNN-LSTM: 28/56/112).
-input_size: 112
+input_size: 112 # ajustado con Optuna: 20 pruebas, ventanas de ajuste 2020, datos 2009-2024, objetivo rel_mae medio
 
 # Encoder. d_model must be a multiple of nhead (each head sees d_model / nhead).
-d_model: 32
-nhead: 4
-num_layers: 2
-dim_feedforward: 64
+d_model: 32 # ajustado con Optuna: 20 pruebas, ventanas de ajuste 2020, datos 2009-2024, objetivo rel_mae medio
+nhead: 2 # ajustado con Optuna: 20 pruebas, ventanas de ajuste 2020, datos 2009-2024, objetivo rel_mae medio
+num_layers: 2 # ajustado con Optuna: 20 pruebas, ventanas de ajuste 2020, datos 2009-2024, objetivo rel_mae medio
+dim_feedforward: 64 # ajustado con Optuna: 20 pruebas, ventanas de ajuste 2020, datos 2009-2024, objetivo rel_mae medio
 # Dropout inside the encoder (attention and feed-forward); 0 = off.
-dropout: 0.1
+dropout: 0.1227 # ajustado con Optuna: 20 pruebas, ventanas de ajuste 2020, datos 2009-2024, objetivo rel_mae medio
 
 # Optimisation: L1 loss on window-scaled targets (matches the MAE criterion).
-learning_rate: 0.0005
-batch_size: 256
+learning_rate: 0.00179 # ajustado con Optuna: 20 pruebas, ventanas de ajuste 2020, datos 2009-2024, objetivo rel_mae medio
+batch_size: 256 # ajustado con Optuna: 20 pruebas, ventanas de ajuste 2020, datos 2009-2024, objetivo rel_mae medio
 max_epochs: 30
 
 # Early stopping on the last val_size days before the cutoff (see cnn_lstm.yaml).
