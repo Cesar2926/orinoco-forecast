@@ -873,3 +873,99 @@ def rain_long(exogenous: pl.DataFrame) -> pl.DataFrame:
 def oni_series(exogenous: pl.DataFrame) -> pl.DataFrame:
     """Serie diaria del ONI (ya con el retraso de publicación aplicado)."""
     return exogenous.select("ds", "oni").unique("ds").sort("ds")
+
+
+# Pronósticos de las redes calculados en Colab (make_report.py --predictions-out).
+LIVE_PACK = repo_root() / "reports" / "live" / "forecasts.parquet"
+# Runners que entrenan en segundos en una CPU de escritorio.
+LOCAL_RUNNERS = ("naive", "arimax", "booster", "timesfm3")
+PRESENTATION_MODELS = (
+    "arimax",
+    "booster",
+    "tcn",
+    "cnn_lstm",
+    "transformer",
+    "timesfm3",
+)
+
+
+def runner_of(model: pl.Expr) -> pl.Expr:
+    """Columna de modelo (``TCN_s1``, ``CNNLSTM``…) al nombre del runner."""
+    return (
+        model.str.replace(r"_s\d+$", "")
+        .str.to_lowercase()
+        .replace({"cnnlstm": "cnn_lstm"})
+    )
+
+
+def load_live_pack(path: Path = LIVE_PACK) -> pl.DataFrame:
+    """Pronósticos precalculados con las semillas promediadas por runner."""
+    if not path.is_file():
+        return pl.DataFrame()
+    return (
+        pl.read_parquet(path)
+        .with_columns(model=runner_of(pl.col("model")))
+        .group_by("unique_id", "ds", "cutoff", "model")
+        .agg(pl.col("y_hat").mean(), pl.col("y").first())
+        .with_columns(source=pl.lit("Colab (precalculado)"))
+    )
+
+
+def compare_live(
+    frame: pl.DataFrame,
+    levels: pl.DataFrame,
+    models: list[str],
+    cutoff: date,
+    *,
+    pack: pl.DataFrame,
+    horizon: int = 14,
+    allow_local_training: bool = False,
+) -> tuple[pl.DataFrame, list[str]]:
+    """Pronósticos de ``models`` (y Naive) en ``cutoff``, uno por runner.
+
+    Las redes salen del paquete de Colab cuando tiene ese corte; los runners
+    livianos se ejecutan aquí. Devuelve los pronósticos y los modelos omitidos
+    (pesados, sin paquete para el corte y sin permiso de entrenar localmente).
+    """
+    in_pack = (
+        set(pack.filter(pl.col("cutoff") == cutoff)["model"])
+        if not pack.is_empty()
+        else set()
+    )
+    parts, skipped = [], []
+    for model in dict.fromkeys([BASELINES, *models]):
+        if model not in LOCAL_RUNNERS and model in in_pack:
+            parts.append(
+                pack.filter(
+                    (pl.col("cutoff") == cutoff) & (pl.col("model") == model)
+                ).select("unique_id", "ds", "cutoff", "model", "y_hat", "source")
+            )
+        elif model in LOCAL_RUNNERS or allow_local_training:
+            out = _run_one_live(frame, model, cutoff, horizon, fast_mode=True)
+            parts.append(
+                out.with_columns(model=runner_of(pl.col("model")))
+                .group_by("unique_id", "ds", "cutoff", "model")
+                .agg(pl.col("y_hat").mean())
+                .with_columns(source=pl.lit("En vivo (este equipo)"))
+            )
+        else:
+            skipped.append(model)
+    forecasts = pl.concat(parts, how="diagonal_relaxed").join(
+        levels.select("unique_id", "ds", "y"), on=["unique_id", "ds"], how="left"
+    )
+    return forecasts, skipped
+
+
+def window_scores(forecasts: pl.DataFrame) -> pl.DataFrame:
+    """MAE de cada modelo en la ventana y su mejora porcentual sobre Naive."""
+    scored = (
+        forecasts.filter(pl.col("y").is_not_null())
+        .group_by("model", "source")
+        .agg(mae=(pl.col("y_hat") - pl.col("y")).abs().mean())
+    )
+    naive = scored.filter(pl.col("model") == BASELINES)["mae"]
+    if scored.is_empty() or naive.is_empty():
+        return scored
+    return scored.with_columns(improvement=100 * (1 - pl.col("mae") / naive[0])).sort(
+        "mae"
+    )

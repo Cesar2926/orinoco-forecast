@@ -15,6 +15,17 @@ uv sync
 uv run python scripts/export_presentation.py   # respaldo sin red en reports/presentation/
 ```
 
+Las tres redes (TCN, CNN-LSTM y Transformer) tardan minutos por pronóstico en una CPU, así
+que sus pronósticos se calculan en Colab con GPU:
+
+1. Abrir `notebooks/colab_folds.ipynb` en Colab con un entorno de GPU.
+2. Correr las celdas de instalación.
+3. Poner `PACK = True` en la celda «Paquete de la presentación» y ejecutarla.
+4. Copiar el archivo descargado a `reports/live/forecasts.parquet`.
+
+Antes de exponer, abre una vez cada comparación que piensas mostrar en «Probar
+predicción». El dashboard la guarda en caché y en la presentación aparece al instante.
+
 ## 2. Abrir el dashboard
 
 ```bash
@@ -35,9 +46,10 @@ En PowerShell: `$env:ORINOCO_PREDICTIONS_DIR="reports/predictions"; uv run strea
 | Pestaña | Qué mostrar |
 |---|---|
 | Datos | La serie de Ciudad Bolívar y Palúa, y por qué Naive (repetir el último nivel) es difícil de batir en un río lento. |
-| **Comparativa de modelos** | Ranking de validación (24 cortes): el mejor modelo, el MAE de cada uno por estación, las barras con Naive como referencia y el error por día de horizonte. |
+| **Comparativa de modelos** | El modelo recomendado y por qué, el % de mejora de cada modelo sobre Naive por estación, la tabla de decisión (precisión, consistencia, costo, riesgos) y el mapa de calor por día de horizonte. |
 | **Test final** | El mismo ranking en 2023–2024 (52 ventanas), con el puesto que cada modelo tenía en validación al lado. Es el resultado que se reporta. |
-| Pronóstico por ventana | Un corte concreto: lo observado frente al pronóstico de cada modelo. |
+| **Probar predicción** | Los seis modelos pronosticando la misma fecha. Naive, ARIMAX, XGBoost y TimesFM 3 corren en vivo; las redes salen del paquete de Colab. Muestra quién acertó mejor en esa ventana. |
+| Pronóstico por ventana | Los pronósticos guardados de la validación, corte por corte. |
 
 Criterio de selección, el mismo en las dos pestañas: el modelo debe tener `rel_mae < 1`
 (mejor que Naive) en **cada** estación y, entre los que cumplen, gana el menor MAE medio

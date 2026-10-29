@@ -240,7 +240,7 @@ def forecast_chart(
         title="Serie",
         scale=alt.Scale(
             domain=[OBSERVED, *models],
-            range=["#222222", *PALETTE[: len(models)]],
+            range=["#9e9e9e", *PALETTE[: len(models)]],  # Visible in both themes.
         ),
     )
     tooltip = ["serie", "ds:T", alt.Tooltip("y:Q", format=".2f")]

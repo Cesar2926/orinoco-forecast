@@ -126,6 +126,27 @@ def cached_live_forecast(
         )
 
 
+@st.cache_data(show_spinner="Leyendo el paquete precalculado…")
+def cached_live_pack(stamp: float) -> pl.DataFrame:
+    return data.load_live_pack()
+
+
+@st.cache_data(show_spinner="Ejecutando los modelos…")
+def cached_compare(
+    models: tuple[str, ...], cutoff: date, allow_local: bool, stamp: float
+) -> tuple[pl.DataFrame, list[str]]:
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        return data.compare_live(
+            cached_model_frame(),
+            cached_levels(),
+            list(models),
+            cutoff,
+            pack=cached_live_pack(stamp),
+            allow_local_training=allow_local,
+        )
+
+
 def _mtime(path: Path) -> float:
     return path.stat().st_mtime if path.is_file() else 0.0
 
@@ -770,7 +791,138 @@ with tab_window:
         st.dataframe(window_mae, hide_index=True)
 
 with tab_live:
-    st.subheader("Probar predicción a 14 días en cualquier fecha")
+    st.subheader("Comparar los modelos en una fecha")
+    pack = cached_live_pack(_mtime(data.LIVE_PACK))
+    pack_cutoffs = sorted(pack["cutoff"].unique()) if not pack.is_empty() else []
+    st.info(
+        "**¿Cómo funciona?** Elige una estación, una fecha de corte y los modelos. "
+        "Cada modelo pronostica los 14 días siguientes usando **solo la historia "
+        "hasta esa fecha**, y se compara con lo que el río hizo en realidad.\n\n"
+        "- **En vivo en este equipo (segundos):** Naive, ARIMAX, XGBoost y "
+        "TimesFM 3.\n"
+        "- **Redes (TCN, CNN-LSTM, Transformer):** se precalculan en Google Colab "
+        "con GPU para los 52 cortes del test, porque entrenarlas aquí tarda "
+        "minutos. Se generan con la celda «Paquete de la presentación» de "
+        "`notebooks/colab_folds.ipynb`."
+    )
+    if not pack_cutoffs:
+        st.warning(
+            "Todavía no está `reports/live/forecasts.parquet`: solo se pueden comparar "
+            "los modelos livianos, salvo que actives el entrenamiento local."
+        )
+    c_station, c_mode, c_cut = st.columns(3)
+    cmp_station = c_station.selectbox(
+        "Estación",
+        [s for s in targets if s in levels["unique_id"].unique()],
+        format_func=lambda s: STATION_LABELS.get(s, s),
+        key="cmp_station",
+    )
+    modes = ["Corte del test (los 6 modelos)", "Fecha libre (modelos livianos)"]
+    cmp_mode = c_mode.radio(
+        "Tipo de fecha", modes if pack_cutoffs else modes[1:], key="cmp_mode"
+    )
+    if cmp_mode == modes[0]:
+        default = min(
+            range(len(pack_cutoffs)),
+            key=lambda i: abs((pack_cutoffs[i] - date(2024, 6, 2)).days),
+        )
+        cmp_cutoff = c_cut.selectbox(
+            "Fecha de corte", pack_cutoffs, index=default, key="cmp_cut_pack"
+        )
+    else:
+        model_days = cached_model_frame()["ds"]
+        last = model_days.max()  # Models only see the modelling period.
+        cmp_cutoff = c_cut.date_input(
+            "Fecha de corte",
+            value=min(date(2024, 6, 2), last),
+            min_value=model_days.min() + timedelta(days=365),
+            max_value=last,
+            key="cmp_cut_free",
+        )
+    cmp_models = st.multiselect(
+        "Modelos",
+        list(data.PRESENTATION_MODELS),
+        default=list(data.PRESENTATION_MODELS),
+        format_func=data.model_label,
+        key="cmp_models",
+    )
+    allow_local = st.checkbox(
+        "Entrenar aquí las redes que no estén precalculadas (1 semilla; varios "
+        "minutos por red en CPU)",
+        value=False,
+        key="cmp_allow_local",
+    )
+    if st.button("Comparar modelos", type="primary", key="cmp_run"):
+        st.session_state["cmp_params"] = (
+            tuple(cmp_models),
+            cmp_cutoff,
+            allow_local,
+        )
+
+    if "cmp_params" in st.session_state:
+        run_models, run_cut, run_allow = st.session_state["cmp_params"]
+        forecasts, skipped = cached_compare(
+            run_models, run_cut, run_allow, _mtime(data.LIVE_PACK)
+        )
+        if skipped:
+            st.warning(
+                "Sin pronóstico precalculado para el corte "
+                f"{run_cut}: {', '.join(data.model_label(m) for m in skipped)}. "
+                "Elige un corte del test o activa el entrenamiento local."
+            )
+        to_label = pl.col("model").map_elements(
+            data.model_label, return_dtype=pl.String
+        )
+        station_rows = forecasts.filter(pl.col("unique_id") == cmp_station)
+        # Score on runner names (Naive is the reference), then show labels.
+        scores = data.window_scores(station_rows).with_columns(model=to_label)
+        here = station_rows.with_columns(model=to_label)
+        contenders = scores.filter(pl.col("model") != data.model_label(data.BASELINES))
+        if not contenders.is_empty() and "improvement" in scores.columns:
+            top = contenders.row(0, named=True)
+            k1, k2, k3 = st.columns(3)
+            k1.metric("Mejor en esta ventana", top["model"])
+            k2.metric("Su error medio", f"{top['mae'] * 100:.0f} cm")
+            k3.metric("Menos error que Naive", f"{top['improvement']:.0f} %")
+        history, after, preds = data.forecast_window(
+            levels,
+            here,
+            cmp_station,
+            run_cut,
+            sorted(here["model"].unique()),
+            horizon=int(cfg["horizon"]),
+        )
+        st.altair_chart(
+            charts.forecast_chart(history, after, preds, run_cut), width="stretch"
+        )
+        if "improvement" in scores.columns:
+            st.dataframe(
+                scores.select("model", "mae", "improvement", "source").with_columns(
+                    pl.col("mae") * 100
+                ),
+                hide_index=True,
+                column_config={
+                    "model": "Modelo",
+                    "mae": st.column_config.NumberColumn(
+                        "Error medio (cm)", format="%.1f"
+                    ),
+                    "improvement": st.column_config.NumberColumn(
+                        "Mejora sobre Naive", format="%.0f %%"
+                    ),
+                    "source": "Origen",
+                },
+            )
+            st.caption(
+                "Una sola ventana de 14 días varía mucho: para elegir modelo vale la "
+                "comparativa de 24 cortes, no una fecha suelta."
+            )
+        else:
+            st.caption(
+                "La fecha elegida no tiene observaciones posteriores para medir."
+            )
+
+    st.divider()
+    st.subheader("Simulador «¿Qué pasaría si…?» con un modelo")
     st.info(
         "**¿Cómo funciona?** Elige una estación, un modelo y cualquier fecha de corte. "
         "El modelo se ajusta usando **solo la historia hasta esa fecha** y pronostica "
