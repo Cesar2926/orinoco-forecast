@@ -153,6 +153,7 @@ class CnnLstmRunner:
     """
 
     name = "cnn_lstm"
+    model_prefix = MODEL
 
     implemented = True
 
@@ -166,7 +167,7 @@ class CnnLstmRunner:
 
     @property
     def model_columns(self) -> list[str]:
-        return [f"{MODEL}_s{s}" for s in self.params["seeds"]]
+        return [f"{self.model_prefix}_s{s}" for s in self.params["seeds"]]
 
     def _prepare(
         self, frame: pl.DataFrame, cutoff: date
@@ -201,6 +202,20 @@ class CnnLstmRunner:
         target = (y - median[:, None]) / iqr[:, None]
         return (net(scaled) - target).abs().mean()
 
+    def _build_net(self, n_features: int, horizon: int) -> nn.Module:
+        """Network trained per seed; subclasses swap the architecture only."""
+        p = self.params
+        return CnnLstm(
+            n_features=n_features,
+            horizon=horizon,
+            conv_channels=p["conv_channels"],
+            kernel_size=p["kernel_size"],
+            conv_layers=p["conv_layers"],
+            lstm_hidden_size=p["lstm_hidden_size"],
+            lstm_layers=p["lstm_layers"],
+            dropout=p.get("dropout", 0.0),
+        )
+
     def _train(
         self,
         seed: int,
@@ -211,16 +226,7 @@ class CnnLstmRunner:
     ) -> nn.Module:
         p = self.params
         torch.manual_seed(seed)
-        net = CnnLstm(
-            n_features=train[0].shape[2],
-            horizon=horizon,
-            conv_channels=p["conv_channels"],
-            kernel_size=p["kernel_size"],
-            conv_layers=p["conv_layers"],
-            lstm_hidden_size=p["lstm_hidden_size"],
-            lstm_layers=p["lstm_layers"],
-            dropout=p.get("dropout", 0.0),
-        ).to(device)
+        net = self._build_net(train[0].shape[2], horizon).to(device)
         optimiser = torch.optim.Adam(net.parameters(), lr=p["learning_rate"])
         # Seeded shuffle of independent windows; the split itself stays chronological.
         generator = torch.Generator().manual_seed(seed)
