@@ -229,6 +229,7 @@ def test_cli_saved_report_and_eval_modes(
 
     synth = _synthetic_frame()
     monkeypatch.setattr(report, "load_levels", lambda: synth)
+    monkeypatch.setattr(report, "load_history", lambda: synth)
     monkeypatch.setattr(
         report, "build_model_frame", lambda stage="A", levels=None: synth
     )

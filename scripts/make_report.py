@@ -441,10 +441,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     exog_path = repo_root() / "data" / "processed" / "orinoco_exogenous.parquet"
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        levels = load_levels()
-        frame = build_model_frame(
-            stage="B" if exog_path.is_file() else "A", levels=levels
-        )
+        if DEFAULT_OUTPUT.is_file():
+            # Same dataset (with lag features) as run_model.py, so --eval
+            # reproduces the validated runs exactly.
+            frame = load_history()
+        else:
+            levels = load_levels()
+            frame = build_model_frame(
+                stage="B" if exog_path.is_file() else "A", levels=levels
+            )
     dates = (
         frame.filter(pl.col("unique_id") == TARGET_STATIONS[0])["ds"]
         .unique()
