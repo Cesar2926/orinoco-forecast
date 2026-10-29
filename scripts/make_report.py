@@ -319,6 +319,9 @@ def _print_banner(ranking: pl.DataFrame, context: str) -> None:
         print(f"Sin modelos para seleccionar ganador ({context}).")
         return
     winner = ranking.row(0, named=True)
+    if not winner["beats_naive_all"]:
+        print(f"\nNingún modelo supera a Naive en todas las estaciones ({context}).")
+        return
     print(
         f"\nGanador ({context}): {winner['model']} "
         f"(MAE medio = {winner['mean_mae']:.4f} m, "
@@ -502,6 +505,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     _print_banner(ranking, context)
     if args.output:
         _save_output(ranking, args.output)
+        stations = args.output.with_name(f"{args.output.stem}_stations")
+        _save_output(per_station, stations.with_suffix(args.output.suffix))
     return 0
 
 

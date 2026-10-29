@@ -233,9 +233,23 @@ def test_cli_saved_report_and_eval_modes(
     monkeypatch.setattr(
         report, "build_model_frame", lambda stage="A", levels=None: synth
     )
+    eval_csv = tmp_path / "test_ranking.csv"
     rc_eval = report.main(
-        ["--eval", "test", "--models", "seasonal_naive", "--windows", "2", "--fit-once"]
+        [
+            "--eval",
+            "test",
+            "--models",
+            "seasonal_naive",
+            "--windows",
+            "2",
+            "--fit-once",
+            "--output",
+            str(eval_csv),
+        ]
     )
     assert rc_eval == 0
     eval_out = capsys.readouterr().out
-    assert "Ganador (test: 2 ventanas de 14d" in eval_out
+    # seasonal_naive does not beat naive on the synthetic series: no winner.
+    assert "Ningún modelo supera a Naive en todas las estaciones (test: 2" in eval_out
+    stations = pl.read_csv(tmp_path / "test_ranking_stations.csv")
+    assert {"naive", "seasonal_naive"} <= set(stations["model"])
